@@ -13,6 +13,9 @@ from langchain_community.chat_models.moonshot import MoonshotChat
 from langchain_community.document_loaders import WebBaseLoader, DirectoryLoader
 import os
 from dotenv import load_dotenv
+from tavily import TavilyClient
+from langchain_community.document_loaders import PlaywrightLoader
+import logging
 
 # 加载环境变量
 load_dotenv()
@@ -29,6 +32,13 @@ embeddings = HuggingFaceEmbeddings(
     model_kwargs={'device': 'cpu'},
     cache_folder=os.getenv("EMBEDDING_MODEL_CACHE_PATH")
 )
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 # 定义RAG状态类型
 class RAGState(TypedDict):
@@ -57,22 +67,47 @@ def load_and_chunk_documents(urls: List[str] = None, file_path: str = None) -> L
     """
     # 从URL加载文档
     if urls:
-        loader = WebBaseLoader(urls)
+        # 使用Playwright加载动态网页
+        loader = PlaywrightLoader(
+            urls=urls,
+            remove_selectors=["header", "footer", "nav"]  # 移除无关元素
+        )
         raw_docs = loader.load()
-    # 从本地文件加载文档
+        # 添加延迟确保内容加载
+        raw_docs = loader.load(wait_until="networkidle", timeout=10000)
+        logger.info(f"成功加载{len(raw_docs)}个文档")
     elif file_path:
+        logger.info(f"开始从本地路径{file_path}加载文档")
         loader = DirectoryLoader(file_path)
         raw_docs = loader.load()
+        logger.info(f"成功加载{len(raw_docs)}个文档")
     else:
         raise ValueError("必须提供urls或file_path参数")
     
     # 文档分块处理
+    logger.info("开始对文档进行分块处理")
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000, 
         chunk_overlap=200,
         add_start_index=True
     )
-    return text_splitter.split_documents(raw_docs)
+
+
+    chunks = text_splitter.split_documents(raw_docs)
+    # 添加文档质量过滤
+    filtered_chunks = []
+    for chunk in chunks:
+        # 过滤掉太短的文档块
+        if len(chunk.page_content) > 100:
+            filtered_chunks.append(chunk)
+        else:
+            logger.debug(f"跳过太短的文档块: {len(chunk.page_content)}字符")
+    
+    logger.info(f"文档分块完成，共{len(filtered_chunks)}个有效块(过滤掉{len(chunks)-len(filtered_chunks)}个无效块)")
+
+
+
+    return filtered_chunks
 
 # 创建向量存储函数
 def create_vector_store(documents: List[Document]) -> FAISS:
@@ -94,16 +129,38 @@ def retrieve_documents(state: RAGState):
     Returns:
         dict - 包含检索到文档的新状态
     """
+    # 查询扩展
+    original_question = state["question"]
+    # 可以使用LLM生成相关查询
+    expanded_questions = [original_question]
+    logger.info(f"原始查询: {original_question}")
+    
     # 如果向量存储不存在则创建
     if not state.get("vector_store"):
+        logger.info("向量存储不存在，开始创建")
         state["vector_store"] = create_vector_store(state["documents"])
+        logger.info("向量存储创建完成")
     
     # 设置检索器并获取相关文档
+    logger.info(f"开始检索与问题相关的文档")
     retriever = state["vector_store"].as_retriever(
-        search_kwargs={"k": 5}  # 控制检索文档数量
+        search_kwargs={"k": 5, "score_threshold": 0.7}
     )
-    docs = retriever.get_relevant_documents(state["question"])
-    return {"documents": docs}
+    
+    # 合并多个查询的结果
+    all_docs = []
+    for q in expanded_questions:
+        docs = retriever.get_relevant_documents(q)
+        all_docs.extend(docs)
+    
+    # 去重
+    unique_docs = {doc.page_content: doc for doc in all_docs}.values()
+    # 按相关性排序
+    unique_docs = sorted(unique_docs, key=lambda x: x.metadata.get('score', 0), reverse=True)[:5]
+    
+    logger.info(f"检索完成，共{len(unique_docs)}个相关文档")
+    return {"documents": list(unique_docs)}
+
 
 # 生成答案函数
 def generate_answer(state: RAGState):
@@ -129,9 +186,12 @@ def generate_answer(state: RAGState):
         问题: {question}
         
         回答要求：
+        - 仔细分析上下文，提取关键信息
         - 如果上下文不包含答案，请说明"根据已知信息无法回答该问题"
-        - 包含内容来源的引用标记 [Source X]
+        - 包含内容来源的引用标记 [Source X]，其中X是文档编号
+        - 对复杂概念进行清晰解释
         - 使用简洁的中文回答
+        - 保持客观中立的态度
         """
     )
     
@@ -147,21 +207,22 @@ def generate_answer(state: RAGState):
     
     # 调用链生成答案
     answer = chain.invoke(state)
+
+    logger.info(f"生成答案使用的上下文长度: {len(context)}字符")
+    logger.debug(f"最终答案: {answer}")
+
     return {"answer": answer}
 
 # 构建状态图
 workflow = StateGraph(RAGState)
 
-# 添加节点
 workflow.add_node("retrieve", retrieve_documents)
 workflow.add_node("generate", generate_answer)
 
-# 设置工作流
 workflow.set_entry_point("retrieve")
 workflow.add_edge("retrieve", "generate")
 workflow.add_edge("generate", END)
 
-# 编译工作流
 rag_app = workflow.compile()
 
 # 运行入口函数
@@ -194,13 +255,32 @@ def run_rag(question: str, urls: List[str] = None, file_path: str = None):
 if __name__ == "__main__":
     # 从URL获取答案
     url_response = run_rag(
-        question="LangChain是什么？",
-        urls=["https://python.langchain.com/docs/get_started/introduction"]
+        question="什么是MySQL库表设计?",
+        urls=[
+            "https://blog.csdn.net/qq_40550384/article/details/146161589",
+            "https://blog.csdn.net/qq_40550384/article/details/147500510",
+            "https://blog.csdn.net/qq_40550384/article/details/132668097",
+            "https://doi.org/10.1016/j.apacoust.2020.107647",
+            "https://xueshu.baidu.com/usercenter/paper/show?paperid=1s740c805s0d0p10f53y0j10pq344792&site=xueshu_se",
+            "https://xueshu.baidu.com/usercenter/paper/show?paperid=1u3a0ar0r50n0ev0582t0mk008192348&site=xueshu_se",
+            "https://blog.csdn.net/qq_40550384/article/details/131190132",
+            "https://blog.csdn.net/qq_40550384/article/details/131660477",
+            "https://blog.csdn.net/qq_40550384/article/details/131423567",
+            "https://blog.csdn.net/qq_40550384/article/details/131287048",
+            "https://blog.csdn.net/qq_40550384/article/details/131261254",
+            "https://blog.csdn.net/qq_40550384/article/details/114605673",
+            "https://blog.csdn.net/qq_40550384/article/details/112346545",
+            "https://blog.csdn.net/qq_40550384/article/details/112985413",
+            "https://blog.csdn.net/qq_40550384/article/details/111309984",
+            "https://blog.csdn.net/qq_40550384/article/details/110039473",
+            "https://blog.csdn.net/qq_40550384/article/details/108440628",
+            "https://blog.csdn.net/qq_40550384/article/details/109659915",
+        ]
     )
-    print("从URL获取的答案:\n", url_response["answer"])
-    print("\n检索到的内容:\n")
+    print(f"\n=== 答案 ===\n{url_response['answer']}\n")
+    print(f"\n=== 检索内容 ===\n")
     for i, doc in enumerate(url_response["documents"]):
-        print(f"文档 {i+1} (来源: {doc.metadata.get('source', '未知')}):\n{doc.page_content}\n")
+        print(f"文档 {i+1} (来源: {doc.metadata.get('source', '未知')}):\n{doc.page_content}\n{'='*50}")
     
     # 从本地文件获取答案(示例路径，请根据实际情况修改)
     # file_response = run_rag(

@@ -5,33 +5,98 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from langchain_openai import ChatOpenAI
-from langchain_huggingface import HuggingFaceEmbeddings
 from langgraph.graph import StateGraph, END
 from typing import TypedDict, List, Annotated, Optional, Union
 from langchain_core.documents import Document
 from langchain_community.chat_models.moonshot import MoonshotChat
-from langchain_community.document_loaders import WebBaseLoader, DirectoryLoader
 import os
 from dotenv import load_dotenv
 from tavily import TavilyClient
-from langchain_community.document_loaders import PlaywrightLoader
 import logging
 
 # 加载环境变量
-load_dotenv()
+from pathlib import Path
+load_dotenv(dotenv_path=Path(__file__).parent.parent.parent / ".env")
 
-model = MoonshotChat(
-    model="moonshot-v1-8k",
-    temperature=0.8,
-    max_tokens=1024,
-    api_key=os.getenv("MOONSHOT_API_KEY")
-)
+# 初始化模型
+def init_model(model_name: str = None):
+    if model_name is None:
+        model_name = os.getenv("MOONSHOT_MODEL", "moonshot-v1-8k")
+    
+    if model_name.startswith("moonshot-"):
+        from langchain_community.chat_models.moonshot import MoonshotChat
+        return MoonshotChat(
+            model=model_name,
+            temperature=0.8,
+            max_tokens=1024,
+            api_key=os.getenv("MOONSHOT_API_KEY")
+        )
+    elif model_name == "claude-3-7-sonnet-latest":
+        from langchain_anthropic import ChatAnthropic
+        return ChatAnthropic(
+            model=model_name,
+            temperature=0.8,
+            max_tokens=1024,
+            api_key=os.getenv("ANTHROPIC_API_KEY")
+        )
+    elif model_name == "gpt-4o":
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(
+            model=model_name,
+            temperature=0.8,
+            max_tokens=1024,
+            api_key=os.getenv("OPENAI_API_KEY")
+        )
+    else:
+        from custom_api_llm.model import CustomAPIModel
+        return CustomAPIModel(
+            model_name="model",
+            username=os.environ.get("API_custom_model_username"),
+            password=os.environ.get("API_custom_model_password"),
+            api_base=os.environ.get("API_custom_model_url"),
+        )
 
-embeddings = HuggingFaceEmbeddings(
-    model_name=os.getenv("EMBEDDING_MODEL_NAME_PATH"),
-    model_kwargs={'device': 'cpu'},
-    cache_folder=os.getenv("EMBEDDING_MODEL_CACHE_PATH")
-)
+# 初始化默认模型
+model = init_model()
+
+# 获取模型绝对路径 - 使用原始项目中已有的模型路径
+current_dir = Path(__file__).parent
+model_path = current_dir.parent / "rag" / "models" / "all-MiniLM-L6-v2" / "all-MiniLM-L6-v2-main"
+cache_path = current_dir.parent / "rag" / "models"
+
+# 延迟初始化embeddings，避免模块导入时触发torch错误
+embeddings = None
+
+def get_embeddings():
+    """延迟获取embeddings实例"""
+    global embeddings
+    if embeddings is None:
+        # 环境配置：确保PyTorch能找到正确的DLL路径
+        import os
+        import sys
+        
+        # 获取torch lib目录路径
+        torch_lib_path = None
+        try:
+            import torch
+            torch_lib_path = os.path.join(os.path.dirname(torch.__file__), 'lib')
+            print(f"✅ 找到PyTorch lib目录: {torch_lib_path}")
+            
+            # 将PyTorch lib目录添加到PATH环境变量
+            if torch_lib_path not in os.environ['PATH']:
+                os.environ['PATH'] = torch_lib_path + os.pathsep + os.environ['PATH']
+                print(f"✅ 将PyTorch lib目录添加到PATH: {torch_lib_path}")
+        except Exception as e:
+            print(f"⚠️  获取PyTorch lib目录失败: {e}")
+        
+        # 导入embeddings，此时环境变量已配置
+        from langchain_huggingface import HuggingFaceEmbeddings
+        embeddings = HuggingFaceEmbeddings(
+            model_name=str(model_path),
+            model_kwargs={'device': 'cpu'},
+            cache_folder=str(cache_path)
+        )
+    return embeddings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -67,14 +132,12 @@ def load_and_chunk_documents(urls: List[str] = None, file_path: str = None) -> L
     """
     # 从URL加载文档
     if urls:
-        # 使用Playwright加载动态网页
-        loader = PlaywrightLoader(
-            urls=urls,
-            remove_selectors=["header", "footer", "nav"]  # 移除无关元素
+        # 使用WebBaseLoader加载网页
+        from langchain_community.document_loaders import WebBaseLoader
+        loader = WebBaseLoader(
+            web_paths=urls,
         )
         raw_docs = loader.load()
-        # 添加延迟确保内容加载
-        raw_docs = loader.load(wait_until="networkidle", timeout=10000)
         logger.info(f"成功加载{len(raw_docs)}个文档")
     elif file_path:
         logger.info(f"开始从本地路径{file_path}加载文档")
@@ -118,7 +181,7 @@ def create_vector_store(documents: List[Document]) -> FAISS:
     Returns:
         FAISS - 向量存储实例
     """
-    return FAISS.from_documents(documents, embeddings)
+    return FAISS.from_documents(documents, get_embeddings())
 
 # 检索节点函数
 def retrieve_documents(state: RAGState):
@@ -150,7 +213,7 @@ def retrieve_documents(state: RAGState):
     # 合并多个查询的结果
     all_docs = []
     for q in expanded_questions:
-        docs = retriever.get_relevant_documents(q)
+        docs = retriever.invoke(q)
         all_docs.extend(docs)
     
     # 去重
@@ -257,6 +320,8 @@ if __name__ == "__main__":
     url_response = run_rag(
         question="什么是MySQL库表设计?",
         urls=[
+            "https://blog.csdn.net/qq_40550384/article/details/149981605",
+            "https://blog.csdn.net/qq_40550384/article/details/156398145",
             "https://blog.csdn.net/qq_40550384/article/details/146161589",
             "https://blog.csdn.net/qq_40550384/article/details/147500510",
             "https://blog.csdn.net/qq_40550384/article/details/132668097",

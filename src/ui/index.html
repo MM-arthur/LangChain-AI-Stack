@@ -1,0 +1,972 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>个人本地面试助手</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        
+        .chat-container {
+            background-color: white;
+            border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            overflow: hidden;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        .chat-container:hover {
+            box-shadow: 0 15px 40px rgba(0, 0, 0, 0.25);
+        }
+        
+        .chat-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 25px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .chat-header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+            animation: shimmer 3s infinite;
+        }
+        
+        @keyframes shimmer {
+            100% {
+                left: 100%;
+            }
+        }
+        
+        .chat-header h1 {
+            font-size: 1.8em;
+            font-weight: 600;
+            margin: 0;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .chat-messages {
+            height: 600px;
+            overflow-y: auto;
+            padding: 20px;
+            background-color: #fafafa;
+        }
+        
+        .chat-messages::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        .chat-messages::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 3px;
+        }
+        
+        .chat-messages::-webkit-scrollbar-thumb {
+            background: #c1c1c1;
+            border-radius: 3px;
+        }
+        
+        .chat-messages::-webkit-scrollbar-thumb:hover {
+            background: #a8a8a8;
+        }
+        
+        .message {
+            margin-bottom: 18px;
+            padding: 12px 16px;
+            border-radius: 18px;
+            position: relative;
+            animation: slideIn 0.3s ease;
+            line-height: 1.5;
+        }
+        
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .user-message {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            margin-left: 25%;
+            border-bottom-right-radius: 4px;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+        }
+        
+        .assistant-message {
+            background-color: white;
+            color: #333;
+            margin-right: 25%;
+            border-bottom-left-radius: 4px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e0e0e0;
+        }
+        
+        .tool-message {
+            background-color: #fff3e0;
+            border-left: 4px solid #ff9800;
+            margin-right: 20%;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(255, 152, 0, 0.15);
+        }
+        
+        .tool-response-message {
+            background-color: #e8f5e9;
+            border-left: 4px solid #4caf50;
+            margin-right: 20%;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(76, 175, 80, 0.15);
+        }
+        
+        .chat-input {
+            display: flex;
+            padding: 20px;
+            border-top: 1px solid #eee;
+            background-color: white;
+            gap: 10px;
+        }
+        
+        .chat-input input {
+            flex: 1;
+            padding: 14px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 25px;
+            font-size: 16px;
+            transition: border-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        .chat-input input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        .chat-input button {
+            padding: 14px 24px;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            min-width: 80px;
+        }
+        
+        .chat-input button:not(:disabled) {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+        }
+        
+        .chat-input button:not(:disabled):hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+        }
+        
+        .chat-input button:not(:disabled):active {
+            transform: translateY(0);
+        }
+        
+        .chat-input button:disabled {
+            background-color: #f0f0f0;
+            color: #999;
+            cursor: not-allowed;
+        }
+        
+        .chat-input button:nth-child(3) {
+            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
+            box-shadow: 0 4px 15px rgba(255, 107, 107, 0.3);
+        }
+        
+        .chat-input button:nth-child(3):hover {
+            box-shadow: 0 6px 20px rgba(255, 107, 107, 0.4);
+        }
+        
+        .model-selector {
+            padding: 20px;
+            border-bottom: 1px solid #eee;
+            background-color: white;
+            text-align: center;
+        }
+        
+        .model-selector label {
+            font-weight: 500;
+            color: #555;
+            margin-right: 10px;
+            font-size: 14px;
+        }
+        
+        .model-selector select {
+            padding: 10px 14px;
+            border-radius: 8px;
+            border: 2px solid #e0e0e0;
+            font-size: 14px;
+            background-color: white;
+            cursor: pointer;
+            transition: border-color 0.3s ease;
+            min-width: 200px;
+        }
+        
+        .model-selector select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .status {
+            text-align: center;
+            padding: 15px;
+            color: #666;
+            font-style: italic;
+            background-color: white;
+            font-size: 14px;
+        }
+        
+        .tool-call-content {
+            font-family: 'Consolas', 'Monaco', monospace;
+            white-space: pre-wrap;
+            font-size: 0.95em;
+            background-color: rgba(0, 0, 0, 0.03);
+            padding: 10px;
+            border-radius: 6px;
+            margin-top: 8px;
+        }
+        
+        .message strong {
+            display: block;
+            margin-bottom: 4px;
+            font-weight: 600;
+            font-size: 0.9em;
+            opacity: 0.8;
+        }
+        
+        .message strong::after {
+            content: '';
+            display: block;
+            width: 100%;
+            height: 1px;
+            background-color: rgba(0, 0, 0, 0.1);
+            margin-top: 4px;
+        }
+        
+        .user-message strong {
+            color: rgba(255, 255, 255, 0.9);
+        }
+        
+        .user-message strong::after {
+            background-color: rgba(255, 255, 255, 0.2);
+        }
+        
+        /* 加载动画 */
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        /* 语音录制相关样式 */
+        .audio-visualizer {
+            width: 100%;
+            height: 80px;
+            background-color: #f0f0f0;
+            border-radius: 8px;
+            margin: 10px 0;
+            display: none;
+        }
+        
+        .audio-visualizer.active {
+            display: block;
+        }
+        
+        .transcript {
+            background-color: #e3f2fd;
+            border: 1px solid #bbdefb;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 10px 20px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div class="chat-container">
+            <div class="chat-header">
+                <h1>个人本地面试助手</h1>
+            </div>
+            
+            <div class="model-selector" v-if="!sessionInitialized">
+                <label for="model">选择模型: </label>
+                <select id="model" v-model="selectedModel">
+                    <option v-for="model in availableModels" :value="model">{{ model }}</option>
+                </select>
+                <button @click="initializeSession" :disabled="initializing">{{ initializing ? '初始化中...' : '初始化会话' }}</button>
+            </div>
+            
+            <div class="status" v-if="!sessionInitialized && !initializing">
+                请先选择模型并初始化会话
+            </div>
+            
+            <div class="chat-messages" v-if="sessionInitialized" ref="messagesContainer">
+                <div v-for="(message, index) in messages" :key="index" 
+                     :class="getMessageClass(message)">
+                    <strong>{{ getMessageRole(message) }}:</strong>
+                    <div v-if="message.type === 'tool'" class="tool-call-content">{{ formatToolCall(message.content) }}</div>
+                    <div v-else>{{ message.content }}</div>
+                </div>
+            </div>
+            
+            <div class="chat-input" v-if="sessionInitialized">
+                <input v-model="inputMessage" 
+                       @keyup.enter="sendMessage" 
+                       placeholder="输入消息..." 
+                       :disabled="sending || recording">
+                <button @click="sendMessage" :disabled="sending || !inputMessage || recording">
+                    {{ sending ? '发送中...' : '发送' }}
+                </button>
+                <button @click="toggleRecording" :disabled="sending">
+                    {{ recording ? '停止录音' : '语音输入' }}
+                </button>
+                <button @click="resetSession" style="margin-left: 10px; background-color: #ff6b6b;">
+                    重置
+                </button>
+            </div>
+            
+            <!-- 语音录制相关UI -->
+            <div v-if="sessionInitialized">
+                <canvas ref="audioVisualizer" class="audio-visualizer"></canvas>
+                <div class="status" v-if="recordingStatus">
+                    {{ recordingStatus }}
+                </div>
+                <div class="transcript" v-if="currentTranscript">
+                    <strong>语音转文字结果:</strong>
+                    <div>{{ currentTranscript }}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, onMounted, nextTick } = Vue;
+        
+        createApp({
+            setup() {
+                // 状态变量
+                const availableModels = ref([]);
+                const selectedModel = ref('API_custom_model');
+                const sessionInitialized = ref(false);
+                const initializing = ref(false);
+                const sending = ref(false);
+                const inputMessage = ref('');
+                const messages = ref([]);
+                const sessionId = ref('session_' + Date.now());
+                const websocket = ref(null);
+                const messagesContainer = ref(null);
+
+                // 语音录制相关状态变量
+                const recording = ref(false);
+                const recordingStatus = ref('');
+                const currentTranscript = ref('');
+                const audioVisualizer = ref(null);
+                
+                // 音频相关变量
+                let mediaRecorder = null;
+                let audioChunks = [];
+                let audioContext = null;
+                let analyser = null;
+                let dataArray = null;
+                let source = null;
+                let audioStream = null;
+
+                // 缓冲助手文本的变量
+                const currentAssistantTextBuffer = ref('');
+                
+                // 辅助函数：将缓冲的文本作为消息推送到 messages 数组
+                const flushTextBuffer = () => {
+                    if (currentAssistantTextBuffer.value) {
+                        messages.value.push({
+                            role: 'assistant',
+                            type: 'text',
+                            content: currentAssistantTextBuffer.value
+                        });
+                        currentAssistantTextBuffer.value = ''; // 清空缓冲器
+                    }
+                };
+
+                // 获取消息的CSS类
+                const getMessageClass = (message) => {
+                    switch (message.role) {
+                        case 'user':
+                            return 'message user-message';
+                        case 'assistant':
+                            if (message.type === 'tool') {
+                                return 'message tool-message';
+                            } else if (message.type === 'tool_response') {
+                                return 'message tool-response-message';
+                            } else {
+                                return 'message assistant-message';
+                            }
+                        default:
+                            return 'message assistant-message';
+                    }
+                };
+                
+                // 获取消息角色显示名称
+                const getMessageRole = (message) => {
+                    switch (message.role) {
+                        case 'user':
+                            return '你';
+                        case 'assistant':
+                            if (message.type === 'tool') {
+                                return '工具调用';
+                            } else if (message.type === 'tool_response') {
+                                return '工具响应';
+                            } else {
+                                return '助手';
+                            }
+                        default:
+                            return '助手';
+                    }
+                };
+                
+                // 格式化工具调用内容
+                const formatToolCall = (content) => {
+                    console.log("[DEBUG] formatToolCall input content:", content); // 打印原始输入
+                    try {
+                        const toolData = JSON.parse(content);
+                        console.log("[DEBUG] formatToolCall parsed toolData:", toolData); // 打印解析后的对象
+                        
+                        // 检查 toolData 中是否有 tool_name 或 name 字段
+                        if (toolData && toolData.tool_name) {
+                            return `工具名称: ${toolData.tool_name}\n输入: ${JSON.stringify(toolData.tool_input, null, 2)}`;
+                        } else if (toolData && toolData.name) { // 某些情况下可能是 'name' 字段 (Anthropic style tool_use)
+                            return `工具名称: ${toolData.name}\n输入: ${JSON.stringify(toolData.input, null, 2)}`;
+                        }
+                        // 如果上述特定字段都没有，就显示整个 JSON
+                        return JSON.stringify(toolData, null, 2);
+                    } catch (e) {
+                        console.error("[DEBUG] formatToolCall JSON parse error:", e, "Original content that failed to parse:", content);
+                        return content; // 如果解析失败，返回原始内容
+                    }
+                };
+                
+                // 获取可用模型
+                const fetchModels = async () => {
+                    try {
+                        // 换成你的dev server
+                        const response = await fetch('http://localhost:8000/api/models');
+                        const data = await response.json();
+                        availableModels.value = data.models;
+                        if (data.models.length > 0) {
+                            // 设置默认模型为 'API_custom_model' 如果可用，否则使用第一个模型
+                            selectedModel.value = data.models.includes('API_custom_model') ? 'API_custom_model' : data.models[0];
+                        }
+                    } catch (error) {
+                        console.error('获取模型列表失败:', error);
+                    }
+                };
+                
+                // 初始化会话
+                const initializeSession = async () => {
+                    if (!selectedModel.value) return;
+                    
+                    initializing.value = true;
+                    try {
+                        const response = await fetch('http://localhost:8000/api/initialize', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                model: selectedModel.value,
+                                timeout_seconds: 120,
+                                recursion_limit: 100,
+                                session_id: sessionId.value
+                            })
+                        });
+                        
+                        if (response.ok) {
+                            sessionInitialized.value = true;
+                            // 连接WebSocket
+                            connectWebSocket();
+                        } else {
+                            console.error('会话初始化失败');
+                        }
+                    } catch (error) {
+                        console.error('会话初始化错误:', error);
+                    } finally {
+                        initializing.value = false;
+                    }
+                };
+                
+                // 连接WebSocket
+                const connectWebSocket = () => {
+                    const wsUrl = `ws://localhost:8000/ws/chat/${sessionId.value}`;
+                    websocket.value = new WebSocket(wsUrl);
+                    
+                    websocket.value.onopen = () => {
+                        console.log('WebSocket连接已建立');
+                    };
+
+                    
+                    websocket.value.onmessage = (event) => {
+                        const data = JSON.parse(event.data);
+                        console.log("[DEBUG] 收到WebSocket消息:", data);  // 添加调试日志
+                        
+                        switch (data.type) {
+                            case 'text':
+                                const isFinal = data.is_final || false;
+                                currentAssistantTextBuffer.value += data.content; // 始终将文本追加到缓冲器
+
+                                if (isFinal) {
+                                    flushTextBuffer(); // 最终文本到达时，将缓冲器中的所有文本作为新消息推送
+                                }
+                                scrollToBottom();
+                                break;
+                            
+                            case 'tool':
+                                flushTextBuffer(); // 在显示工具调用前，先将所有缓冲文本推送到消息列表
+                                messages.value.push({
+                                    role: 'assistant',
+                                    type: 'tool',
+                                    content: data.content
+                                });
+                                scrollToBottom();
+                                break;
+                                
+                            case 'tool_response':
+                                flushTextBuffer(); // 在显示工具响应前，先将所有缓冲文本推送到消息列表
+                                messages.value.push({
+                                    role: 'assistant',
+                                    type: 'tool_response',
+                                    content: data.content
+                                });
+                                scrollToBottom();
+                                break;
+                            
+                            case 'complete':
+                                flushTextBuffer(); // 会话结束时，将所有缓冲文本推送到消息列表
+                                sending.value = false;
+                                scrollToBottom();
+                                break;
+                                
+                            case 'error':
+                                flushTextBuffer(); // 发生错误时，将所有缓冲文本推送到消息列表
+                                messages.value.push({
+                                    role: 'assistant',
+                                    type: 'error',
+                                    content: `错误: ${data.content}`
+                                });
+                                sending.value = false;
+                                scrollToBottom();
+                                break;
+                                
+                            case 'reset_complete':
+                                messages.value = [];
+                                break;
+                        }
+                    };
+
+                    
+                    websocket.value.onclose = () => {
+                        console.log('WebSocket连接已关闭');
+                    };
+                    
+                    websocket.value.onerror = (error) => {
+                        console.error('WebSocket错误:', error);
+                    };
+                };
+                
+                // 发送消息
+                const sendMessage = () => {
+                    if (!inputMessage.value.trim() || sending.value) return;
+                    
+                    // 添加用户消息到界面
+                    messages.value.push({
+                        role: 'user',
+                        type: 'text',
+                        content: inputMessage.value
+                    });
+                    
+                    // 重置缓冲器，准备接收新的助手文本
+                    currentAssistantTextBuffer.value = '';
+
+                    // 通过WebSocket发送
+                    if (websocket.value && websocket.value.readyState === WebSocket.OPEN) {
+                        websocket.value.send(JSON.stringify({
+                            type: 'chat',
+                            content: inputMessage.value
+                        }));
+                        
+                        sending.value = true;
+                        inputMessage.value = '';
+                        scrollToBottom();
+                    }
+                };
+                
+                // 重置会话
+                const resetSession = () => {
+                    if (websocket.value && websocket.value.readyState === WebSocket.OPEN) {
+                        websocket.value.send(JSON.stringify({
+                            type: 'reset'
+                        }));
+                    }
+                };
+                
+                // 滚动到底部
+                const scrollToBottom = () => {
+                    nextTick(() => {
+                        if (messagesContainer.value) {
+                            messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight;
+                        }
+                    });
+                };
+                
+                // 语音录制相关方法
+                const toggleRecording = async () => {
+                    if (recording.value) {
+                        await stopRecording();
+                    } else {
+                        await startRecording();
+                    }
+                };
+                
+                // 开始录音
+                const startRecording = async () => {
+                    try {
+                        // 请求麦克风权限
+                        audioStream = await navigator.mediaDevices.getUserMedia({ 
+                            audio: {
+                                sampleRate: 16000, // 16kHz采样率
+                                channelCount: 1, // 单声道
+                                sampleSize: 16, // 16位采样
+                                echoCancellation: true, // 开启回声消除
+                                noiseSuppression: true // 开启噪声抑制
+                            } 
+                        });
+                        
+                        recordingStatus.value = '麦克风权限获取成功，准备录音...';
+                        
+                        // 设置音频可视化
+                        setupVisualizer(audioStream);
+                        
+                        // 使用MediaRecorder API录制音频
+                        mediaRecorder = new MediaRecorder(audioStream);
+                        
+                        audioChunks = [];
+                        
+                        mediaRecorder.ondataavailable = (event) => {
+                            if (event.data.size > 0) {
+                                audioChunks.push(event.data);
+                            }
+                        };
+                        
+                        mediaRecorder.onstop = async () => {
+                            // 合并录制的音频数据
+                            const recordedBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
+                            
+                            // 将录制的音频转换为WAV格式
+                            const wavBlob = await convertToWav(recordedBlob);
+                            
+                            // 发送到后端
+                            await sendAudioToBackend(wavBlob);
+                        };
+                        
+                        // 开始录音
+                        mediaRecorder.start();
+                        recording.value = true;
+                        
+                        // 更新UI
+                        recordingStatus.value = '正在录音...';
+                        if (audioVisualizer.value) {
+                            audioVisualizer.value.classList.add('active');
+                        }
+                        
+                    } catch (error) {
+                        console.error('获取麦克风权限失败:', error);
+                        recordingStatus.value = '获取麦克风权限失败，请检查浏览器设置';
+                    }
+                };
+                
+                // 停止录音
+                const stopRecording = async () => {
+                    if (!recording.value || !mediaRecorder) return;
+                    
+                    // 停止录音
+                    mediaRecorder.stop();
+                    recording.value = false;
+                    
+                    // 停止流
+                    if (audioStream) {
+                        audioStream.getTracks().forEach(track => track.stop());
+                    }
+                    
+                    // 更新UI
+                    recordingStatus.value = '正在处理音频...';
+                    if (audioVisualizer.value) {
+                        audioVisualizer.value.classList.remove('active');
+                    }
+                    
+                    // 关闭音频上下文
+                    if (audioContext) {
+                        audioContext.close();
+                    }
+                };
+                
+                // 配置音频可视化
+                const setupVisualizer = (stream) => {
+                    if (!audioVisualizer.value) return;
+                    
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    analyser = audioContext.createAnalyser();
+                    analyser.fftSize = 256;
+                    
+                    const bufferLength = analyser.frequencyBinCount;
+                    dataArray = new Uint8Array(bufferLength);
+                    
+                    source = audioContext.createMediaStreamSource(stream);
+                    source.connect(analyser);
+                    
+                    // 设置画布尺寸
+                    audioVisualizer.value.width = audioVisualizer.value.offsetWidth;
+                    audioVisualizer.value.height = audioVisualizer.value.offsetHeight;
+                    
+                    drawVisualizer();
+                };
+                
+                // 绘制音频可视化
+                const drawVisualizer = () => {
+                    if (!audioVisualizer.value || !analyser) return;
+                    
+                    const canvas = audioVisualizer.value;
+                    const ctx = canvas.getContext('2d');
+                    
+                    const draw = () => {
+                        requestAnimationFrame(draw);
+                        
+                        analyser.getByteFrequencyData(dataArray);
+                        
+                        ctx.fillStyle = '#e0e0e0';
+                        ctx.fillRect(0, 0, canvas.width, canvas.height);
+                        
+                        const barWidth = (canvas.width / dataArray.length) * 2.5;
+                        let x = 0;
+                        
+                        for (let i = 0; i < dataArray.length; i++) {
+                            const barHeight = (dataArray[i] / 255) * canvas.height;
+                            
+                            ctx.fillStyle = '#667eea';
+                            ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+                            
+                            x += barWidth + 1;
+                        }
+                    };
+                    draw();
+                };
+                
+                // 发送音频到后端
+                const sendAudioToBackend = async (audioBlob) => {
+                    try {
+                        const formData = new FormData();
+                        formData.append('audio', audioBlob, 'recording.wav');
+                        formData.append('conversation_id', sessionId.value);
+                        
+                        const response = await fetch('http://localhost:8000/api/process_audio', {
+                            method: 'POST',
+                            body: formData,
+                            mode: 'cors',
+                            cache: 'no-cache'
+                        });
+                        
+                        if (!response.ok) {
+                            // 尝试获取错误详情
+                            const errorData = await response.json().catch(() => ({}));
+                            console.error('后端处理失败:', errorData);
+                            throw new Error(`后端处理失败: ${JSON.stringify(errorData)}`);
+                        }
+                        
+                        const result = await response.json();
+                        console.log('后端响应结果:', result);
+                        
+                        // 更新UI
+                        currentTranscript.value = result.transcript;
+                        recordingStatus.value = '处理完成';
+                        
+                        // 添加用户消息到界面
+                        messages.value.push({
+                            role: 'user',
+                            type: 'text',
+                            content: result.optimized_text || result.transcript
+                        });
+                        
+                        // 添加助手回复到界面
+                        messages.value.push({
+                            role: 'assistant',
+                            type: 'text',
+                            content: result.response
+                        });
+                        
+                        scrollToBottom();
+                        
+                    } catch (error) {
+                        console.error('发送音频失败:', error);
+                        recordingStatus.value = '发送音频失败，请检查网络连接';
+                    } finally {
+                        recordingStatus.value = '';
+                    }
+                };
+                
+                // 音频格式转换函数 - 将录制的音频转换为WAV格式
+                const convertToWav = async (blob) => {
+                    try {
+                        // 创建AudioContext
+                        const audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                            sampleRate: 16000, // 设置为后端需要的采样率
+                            latencyHint: 'playback'
+                        });
+                        
+                        // 解码录制的音频数据
+                        const arrayBuffer = await blob.arrayBuffer();
+                        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+                        
+                        // 获取单声道数据
+                        const channelData = audioBuffer.getChannelData(0);
+                        
+                        // 如果是多声道，转换为单声道
+                        if (audioBuffer.numberOfChannels > 1) {
+                            const tempChannelData = new Float32Array(channelData.length);
+                            for (let i = 0; i < audioBuffer.numberOfChannels; i++) {
+                                const channel = audioBuffer.getChannelData(i);
+                                for (let j = 0; j < channel.length; j++) {
+                                    tempChannelData[j] += channel[j] / audioBuffer.numberOfChannels;
+                                }
+                            }
+                            channelData.set(tempChannelData);
+                        }
+                        
+                        // 转换为16位PCM数据
+                        const pcmData = new Int16Array(channelData.length);
+                        for (let i = 0; i < channelData.length; i++) {
+                            const sample = Math.max(-1, Math.min(1, channelData[i]));
+                            pcmData[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+                        }
+                        
+                        // 创建WAV文件头
+                        const wavBuffer = new ArrayBuffer(44 + pcmData.length * 2);
+                        const view = new DataView(wavBuffer);
+                        
+                        // 写入RIFF标识符
+                        writeString(view, 0, 'RIFF');
+                        view.setUint32(4, 36 + pcmData.length * 2, true);
+                        writeString(view, 8, 'WAVE');
+                        
+                        // 写入fmt子块
+                        writeString(view, 12, 'fmt ');
+                        view.setUint32(16, 16, true);
+                        view.setUint16(20, 1, true); // 音频格式: PCM
+                        view.setUint16(22, 1, true); // 声道数: 1
+                        view.setUint32(24, 16000, true); // 采样率: 16000
+                        view.setUint32(28, 16000 * 2, true); // 字节率: 采样率 * 声道数 * 采样位数 / 8
+                        view.setUint16(32, 2, true); // 块对齐: 声道数 * 采样位数 / 8
+                        view.setUint16(34, 16, true); // 采样位数: 16
+                        
+                        // 写入data子块
+                        writeString(view, 36, 'data');
+                        view.setUint32(40, pcmData.length * 2, true);
+                        
+                        // 写入PCM数据
+                        for (let i = 0; i < pcmData.length; i++) {
+                            view.setInt16(44 + i * 2, pcmData[i], true);
+                        }
+                        
+                        // 关闭AudioContext
+                        audioContext.close();
+                        
+                        // 返回WAV Blob
+                        return new Blob([wavBuffer], { type: 'audio/wav' });
+                        
+                    } catch (error) {
+                        console.error('音频转换失败:', error);
+                        // 如果转换失败，尝试直接使用原始音频（如果是WAV格式）
+                        if (blob.type === 'audio/wav') {
+                            return blob;
+                        }
+                        // 否则，返回一个空的WAV文件
+                        return new Blob([], { type: 'audio/wav' });
+                    }
+                };
+                
+                // 辅助函数：写入字符串到DataView
+                const writeString = (view, offset, string) => {
+                    for (let i = 0; i < string.length; i++) {
+                        view.setUint8(offset + i, string.charCodeAt(i));
+                    }
+                };
+                
+                // 组件挂载时获取模型列表
+                onMounted(() => {
+                    fetchModels();
+                });
+                
+                // 返回需要在模板中使用的变量和方法
+                return {
+                    availableModels,
+                    selectedModel,
+                    sessionInitialized,
+                    initializing,
+                    sending,
+                    inputMessage,
+                    messages,
+                    messagesContainer,
+                    initializeSession,
+                    sendMessage,
+                    resetSession,
+                    getMessageClass,
+                    getMessageRole,
+                    formatToolCall,
+                    // 语音录制相关
+                    recording,
+                    recordingStatus,
+                    currentTranscript,
+                    audioVisualizer,
+                    toggleRecording
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>

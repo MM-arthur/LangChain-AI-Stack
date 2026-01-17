@@ -2,19 +2,7 @@
   "get_current_time": {
     "command": "python",
     "args": [
-      "./mcp_server/mcp_server_time.py"
-    ],
-    "transport": "stdio"
-  },
-  "dbhub_server": {
-    "command": "node",
-    "args": [
-      "yourpath/dist/index.js",
-      "--transport",
-      "stdio",
-      "--readonly",
-      "--dsn",
-      "mysql://yourusername:yourpassward@yoururl:yourport/yourdatabase"
+      "src/mcp_server/mcp_server_time.py"
     ],
     "transport": "stdio"
   }

@@ -8,7 +8,7 @@ config.py
 # 忽略日志文件
 *.log
 # 模型文件（大型二进制文件）
-RAG/models/
+rag/models/
 # IDE配置文件
 .vscode/
 .idea/

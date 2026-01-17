@@ -1,9 +1,8 @@
 from typing import Any, Dict, List, Optional, Union
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
-from langchain_core.outputs import ChatResult, ChatGeneration, Generation
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.outputs import ChatResult, ChatGeneration
 from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import BaseTool
 import requests
 import json
 import base64
@@ -14,12 +13,12 @@ from pydantic import Field
 
 class CustomAPIModel(BaseChatModel):
     """
-    将仅支持单次问答的朴素Restful HTTP API接口, 封装为支持langChain & LangGraph Agent 的 LLM 形态 
+    将仅支持单次问答的朴素LLM Restful HTTP API接口, 封装为支持langChain & LangGraph Agent 的 LLM 形态 
     CustomAPIModel 为 LangChain Agent 中 LLM 的角色。它不负责执行工具，也不负责管理多轮的 ReAct 循环（思考-行动-观察）
     这些都由 create_react_agent 和其底层的 LangGraph 框架来处理。
     模型只专注于一件事：根据给定的消息历史和工具定义，决定是给出最终答案，还是发出工具调用指令，并以 LangChain 期望的 AIMessage 格式返回。
 
-    Wrap a simple Restful HTTP API that only supports single-turn Q&A into an LLM format compatible with LangChain & LangGraph Agent
+    Wrap a simple LLM Restful HTTP API that only supports single-turn Q&A into an LLM format compatible with LangChain & LangGraph Agent
     CustomAPIModel serves as the LLM role in LangChain Agent. It is not responsible for executing tools nor managing the multi-turn ReAct loop (Thought-Action-Observation)
     These are handled by create_react_agent and its underlying LangGraph framework.
     The model focuses solely on one thing: based on the given message history and tool definitions, decide whether to provide a final answer or issue tool call instructions, and return it in the AIMessage format expected by LangChain.
@@ -217,12 +216,12 @@ class CustomAPIModel(BaseChatModel):
         
         # 构造请求体 - 取决于你得API参数
         payload = {
-            "question": ""
-            "XXX": "XXX"
-            "XXX": "XXX"
-            "XXX": "XXX"
-            "XXX": "XXX"
-            "XXX": "XXX"
+            "question": "",
+            "XXX": "XXX",
+            "XXX": "XXX",
+            "XXX": "XXX",
+            "XXX": "XXX",
+            "XXX": "XXX",
         }
         
         
@@ -312,12 +311,12 @@ class CustomAPIModel(BaseChatModel):
         
         # 构造请求体 - 取决于你得API参数
         payload = {
-            "question": ""
-            "XXX": "XXX"
-            "XXX": "XXX"
-            "XXX": "XXX"
-            "XXX": "XXX"
-            "XXX": "XXX"
+            "question": "",
+            "XXX": "XXX",
+            "XXX": "XXX",
+            "XXX": "XXX",
+            "XXX": "XXX",
+            "XXX": "XXX",
         }
         
         

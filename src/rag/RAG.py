@@ -207,7 +207,7 @@ def retrieve_documents(state: RAGState):
     # 设置检索器并获取相关文档
     logger.info(f"开始检索与问题相关的文档")
     retriever = state["vector_store"].as_retriever(
-        search_kwargs={"k": 5, "score_threshold": 0.7}
+        search_kwargs={"k": 5}
     )
     
     # 合并多个查询的结果
@@ -236,7 +236,7 @@ def generate_answer(state: RAGState):
     """
     # 构建上下文字符串
     context = "\n\n".join(
-        f"Source {i+1} (Page {doc.metadata.get('page', '?')}): {doc.page_content}"
+        f"Source {doc.metadata.get('source', '未知')} (Page {doc.metadata.get('page', '?')}): {doc.page_content}"
         for i, doc in enumerate(state["documents"])
     )
     
@@ -251,7 +251,7 @@ def generate_answer(state: RAGState):
         回答要求：
         - 仔细分析上下文，提取关键信息
         - 如果上下文不包含答案，请说明"根据已知信息无法回答该问题"
-        - 包含内容来源的引用标记 [Source X]，其中X是文档编号
+        - 包含内容来源的引用标记，引用格式为[Source URL或文件路径]，其中URL或文件路径是上下文中标注的完整来源地址
         - 对复杂概念进行清晰解释
         - 使用简洁的中文回答
         - 保持客观中立的态度

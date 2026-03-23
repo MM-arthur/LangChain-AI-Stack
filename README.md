@@ -9,4 +9,6 @@ Taste:
 
 
 
+ui: python -m http.server 8080
 
+src: python main.py

@@ -59,43 +59,57 @@ def init_model(model_name: str = None):
 # 初始化默认模型
 model = init_model()
 
-# 获取模型绝对路径 - 使用原始项目中已有的模型路径
 current_dir = Path(__file__).parent
-model_path = current_dir.parent / "rag" / "models" / "all-MiniLM-L6-v2" / "all-MiniLM-L6-v2-main"
 cache_path = current_dir.parent / "rag" / "models"
 
-# 延迟初始化embeddings，避免模块导入时触发torch错误
 embeddings = None
 
 def get_embeddings():
-    """延迟获取embeddings实例"""
+    """延迟获取embeddings实例，支持从ModelScope加载Qwen3-Embedding-0.6B"""
     global embeddings
     if embeddings is None:
-        # 环境配置：确保PyTorch能找到正确的DLL路径
         import os
         import sys
         
-        # 获取torch lib目录路径
         torch_lib_path = None
         try:
             import torch
             torch_lib_path = os.path.join(os.path.dirname(torch.__file__), 'lib')
             print(f"✅ 找到PyTorch lib目录: {torch_lib_path}")
             
-            # 将PyTorch lib目录添加到PATH环境变量
             if torch_lib_path not in os.environ['PATH']:
                 os.environ['PATH'] = torch_lib_path + os.pathsep + os.environ['PATH']
                 print(f"✅ 将PyTorch lib目录添加到PATH: {torch_lib_path}")
         except Exception as e:
             print(f"⚠️  获取PyTorch lib目录失败: {e}")
         
-        # 导入embeddings，此时环境变量已配置
-        from langchain_huggingface import HuggingFaceEmbeddings
-        embeddings = HuggingFaceEmbeddings(
-            model_name=str(model_path),
-            model_kwargs={'device': 'cpu'},
-            cache_folder=str(cache_path)
-        )
+        embedding_model = os.getenv("EMBEDDING_MODEL", "qwen3-embedding-0.6b")
+        
+        if embedding_model == "qwen3-embedding-0.6b":
+            print(f"🔄 加载 Qwen3-Embedding-0.6B 模型...")
+            from modelscope import snapshot_download
+            
+            model_dir = snapshot_download(
+                'Qwen/Qwen3-Embedding-0.6B',
+                cache_dir=str(cache_path)
+            )
+            print(f"✅ 模型下载完成: {model_dir}")
+            
+            from langchain_huggingface import HuggingFaceEmbeddings
+            embeddings = HuggingFaceEmbeddings(
+                model_name=model_dir,
+                model_kwargs={'device': 'cpu', 'trust_remote_code': True},
+                encode_kwargs={'normalize_embeddings': True}
+            )
+            print(f"✅ Qwen3-Embedding-0.6B 加载成功")
+        else:
+            from langchain_huggingface import HuggingFaceEmbeddings
+            model_path = os.getenv("EMBEDDING_MODEL_NAME_PATH", str(cache_path / "all-MiniLM-L6-v2" / "all-MiniLM-L6-v2-main"))
+            embeddings = HuggingFaceEmbeddings(
+                model_name=model_path,
+                model_kwargs={'device': 'cpu'},
+                cache_folder=str(cache_path)
+            )
     return embeddings
 
 logging.basicConfig(
@@ -130,15 +144,45 @@ def load_and_chunk_documents(urls: List[str] = None, file_path: str = None) -> L
     Returns:
         List[Document] - 分块后的文档列表
     """
+    import requests
+    from bs4 import BeautifulSoup
+    
     # 从URL加载文档
     if urls:
-        # 使用WebBaseLoader加载网页
-        from langchain_community.document_loaders import WebBaseLoader
-        loader = WebBaseLoader(
-            web_paths=urls,
-        )
-        raw_docs = loader.load()
-        logger.info(f"成功加载{len(raw_docs)}个文档")
+        raw_docs = []
+        print(f"📄 开始加载 {len(urls)} 个URL...")
+        for i, url in enumerate(urls):
+            try:
+                print(f"   [{i+1}/{len(urls)}] 加载: {url}")
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
+                response = requests.get(url, headers=headers, timeout=30)
+                response.encoding = 'utf-8'
+                
+                soup = BeautifulSoup(response.text, 'html.parser')
+                
+                article = soup.find('article') or soup.find('div', class_='article-content') or soup.find('div', id='article_content') or soup.find('div', class_='markdown_views')
+                
+                if article:
+                    content = article.get_text(separator='\n', strip=True)
+                else:
+                    content = soup.get_text(separator='\n', strip=True)
+                
+                lines = [line.strip() for line in content.split('\n') if line.strip()]
+                clean_content = '\n'.join(lines)
+                
+                doc = Document(
+                    page_content=clean_content,
+                    metadata={'source': url}
+                )
+                raw_docs.append(doc)
+                print(f"      ✅ 成功，内容长度: {len(clean_content)} 字符")
+            except Exception as e:
+                print(f"      ❌ 失败: {e}")
+                continue
+        
+        print(f"✅ 成功加载 {len(raw_docs)} 个文档")
     elif file_path:
         logger.info(f"开始从本地路径{file_path}加载文档")
         loader = DirectoryLoader(file_path)
@@ -147,8 +191,7 @@ def load_and_chunk_documents(urls: List[str] = None, file_path: str = None) -> L
     else:
         raise ValueError("必须提供urls或file_path参数")
     
-    # 文档分块处理
-    logger.info("开始对文档进行分块处理")
+    print("📝 开始对文档进行分块处理...")
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000, 
         chunk_overlap=200,
@@ -157,22 +200,21 @@ def load_and_chunk_documents(urls: List[str] = None, file_path: str = None) -> L
 
 
     chunks = text_splitter.split_documents(raw_docs)
-    # 添加文档质量过滤
+    print(f"   分块完成，共 {len(chunks)} 个块")
+    
     filtered_chunks = []
     for chunk in chunks:
-        # 过滤掉太短的文档块
         if len(chunk.page_content) > 100:
             filtered_chunks.append(chunk)
         else:
-            logger.debug(f"跳过太短的文档块: {len(chunk.page_content)}字符")
+            pass
     
-    logger.info(f"文档分块完成，共{len(filtered_chunks)}个有效块(过滤掉{len(chunks)-len(filtered_chunks)}个无效块)")
+    print(f"✅ 文档处理完成，共 {len(filtered_chunks)} 个有效块")
 
 
 
     return filtered_chunks
 
-# 创建向量存储函数
 def create_vector_store(documents: List[Document]) -> FAISS:
     """
     从文档创建FAISS向量存储
@@ -181,7 +223,30 @@ def create_vector_store(documents: List[Document]) -> FAISS:
     Returns:
         FAISS - 向量存储实例
     """
-    return FAISS.from_documents(documents, get_embeddings())
+    print(f"🔨 创建向量存储，共 {len(documents)} 个文档块...")
+    print(f"⏳ 正在进行向量化（CPU模式，预计需要 1-3 分钟）...")
+    
+    embeddings = get_embeddings()
+    
+    texts = [doc.page_content for doc in documents]
+    metadatas = [doc.metadata for doc in documents]
+    
+    batch_size = 50
+    all_embeddings = []
+    
+    for i in range(0, len(texts), batch_size):
+        batch_texts = texts[i:i+batch_size]
+        batch_embeddings = embeddings.embed_documents(batch_texts)
+        all_embeddings.extend(batch_embeddings)
+        progress = min(i + batch_size, len(texts))
+        print(f"   向量化进度: {progress}/{len(texts)} ({progress*100//len(texts)}%)")
+    
+    print(f"   构建FAISS索引...")
+    text_embedding_pairs = list(zip(texts, all_embeddings))
+    vs = FAISS.from_embeddings(text_embedding_pairs, embeddings, metadatas=metadatas)
+    
+    print(f"✅ 向量存储创建完成")
+    return vs
 
 # 检索节点函数
 def retrieve_documents(state: RAGState):
@@ -276,7 +341,28 @@ def generate_answer(state: RAGState):
 
     return {"answer": answer}
 
-# 构建状态图
+_vector_store_cache = None
+_cache_urls_key = None
+
+def get_or_create_vector_store(urls: List[str] = None, file_path: str = None) -> FAISS:
+    """
+    获取或创建向量存储（带缓存）
+    """
+    global _vector_store_cache, _cache_urls_key
+    
+    cache_key = str(sorted(urls)) if urls else file_path
+    
+    if _vector_store_cache is not None and _cache_urls_key == cache_key:
+        print("📦 使用缓存的向量存储")
+        return _vector_store_cache
+    
+    print("🔄 创建新的向量存储...")
+    chunked_docs = load_and_chunk_documents(urls=urls, file_path=file_path)
+    _vector_store_cache = create_vector_store(chunked_docs)
+    _cache_urls_key = cache_key
+    
+    return _vector_store_cache
+
 workflow = StateGraph(RAGState)
 
 workflow.add_node("retrieve", retrieve_documents)
@@ -288,7 +374,6 @@ workflow.add_edge("generate", END)
 
 rag_app = workflow.compile()
 
-# 运行入口函数
 def run_rag(question: str, urls: List[str] = None, file_path: str = None):
     """
     RAG运行入口
@@ -299,20 +384,43 @@ def run_rag(question: str, urls: List[str] = None, file_path: str = None):
     Returns:
         str - 生成的答案
     """
-    # 预处理文档
-    chunked_docs = load_and_chunk_documents(urls=urls, file_path=file_path)
+    vector_store = get_or_create_vector_store(urls=urls, file_path=file_path)
     
-    # 初始化状态
-    initial_state = {
-        "question": question,
-        "documents": chunked_docs,
-        "answer": "",
-        "vector_store": None  # 延迟初始化
-    }
+    retriever = vector_store.as_retriever(search_kwargs={"k": 5})
+    docs = retriever.invoke(question)
     
-    # 执行工作流
-    result = rag_app.invoke(initial_state)
-    return result
+    context = "\n\n".join(
+        f"Source {doc.metadata.get('source', '未知')}: {doc.page_content}"
+        for doc in docs
+    )
+    
+    prompt = ChatPromptTemplate.from_template(
+        """你是一个专业的问答助手。请仅使用以下上下文信息回答问题：
+        {context}
+        
+        当前日期: {date}
+        问题: {question}
+        
+        回答要求：
+        - 仔细分析上下文，提取关键信息
+        - 如果上下文不包含答案，请说明"根据已知信息无法回答该问题"
+        - 包含内容来源的引用标记，引用格式为[Source URL或文件路径]
+        - 使用简洁的中文回答
+        """
+    )
+    
+    chain = (
+        {"context": lambda _: context, 
+         "question": lambda x: x["question"],
+         "date": lambda _: os.getenv("CURRENT_DATE", "2023-10-01")}
+        | prompt
+        | model
+        | StrOutputParser()
+    )
+    
+    answer = chain.invoke({"question": question})
+    
+    return {"answer": answer, "documents": docs}
 
 # 使用示例
 if __name__ == "__main__":

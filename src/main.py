@@ -1,6 +1,7 @@
 import sys
 import os
-# 将src目录添加到Python路径
+import logging
+
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from fastapi import FastAPI, WebSocket, HTTPException, UploadFile, File, Form
@@ -23,6 +24,12 @@ from speech_recognition.speech_to_text import SpeechToTextService
 from multi_agent import create_multi_agent
 
 load_dotenv(override=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -452,6 +459,213 @@ async def health_check():
         "status": "ok",
         "service": "融合智能体API"
     }
+
+@app.post("/api/upload_file")
+async def upload_file(
+    file: UploadFile = File(...),
+    conversation_id: str = Form(default="default")
+):
+    """
+    上传文件并进行OCR或文档解析
+    支持的文件类型：图片(png/jpg/jpeg/bmp/tiff/webp)、PDF、Excel(xlsx/xls)、Word(docx/doc)
+    """
+    import tempfile
+    import shutil
+    from pathlib import Path
+    
+    temp_file_path = None
+    
+    try:
+        # 保存上传的文件到临时目录
+        file_suffix = Path(file.filename).suffix.lower()
+        
+        # 验证文件类型
+        allowed_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp', '.pdf', '.xlsx', '.xls', '.docx', '.doc']
+        if file_suffix not in allowed_extensions:
+            return {
+                "success": False,
+                "error": f"不支持的文件类型: {file_suffix}。支持的类型: {', '.join(allowed_extensions)}"
+            }
+        
+        # 创建临时文件
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_suffix) as temp_file:
+            temp_file_path = temp_file.name
+            shutil.copyfileobj(file.file, temp_file)
+        
+        logger.info(f"文件已上传: {file.filename}, 大小: {os.path.getsize(temp_file_path)} bytes")
+        
+        # 调用统一的LangGraph Agent处理
+        agent = create_multi_agent()
+        
+        # 获取对话历史
+        history = conversation_history.get(conversation_id, [])
+        
+        # 构建输入
+        agent_input = {
+            "input_text": f"请处理上传的文件: {file.filename}",
+            "file_path": temp_file_path,
+            "history": history
+        }
+        
+        # 调用Agent
+        result = agent.invoke(agent_input)
+        
+        # 更新对话历史
+        conversation_history[conversation_id] = result["history"]
+        
+        # 返回结果
+        return {
+            "success": True,
+            "filename": file.filename,
+            "file_type": result.get("file_type", "unknown"),
+            "extracted_text": result.get("document_content", ""),
+            "ocr_result": result.get("ocr_result", {}),
+            "response": result.get("response", ""),
+            "conversation_id": conversation_id
+        }
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {
+            "success": False,
+            "error": f"文件处理失败: {str(e)}"
+        }
+    finally:
+        # 清理临时文件
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.unlink(temp_file_path)
+                logger.info(f"临时文件已清理: {temp_file_path}")
+            except Exception as e:
+                logger.warning(f"清理临时文件失败: {temp_file_path}, 错误: {str(e)}")
+
+@app.post("/api/ocr")
+async def ocr_process(
+    file: UploadFile = File(...),
+    enable_structure: bool = Form(default=False)
+):
+    """
+    仅进行OCR处理，不生成AI回复
+    """
+    import tempfile
+    import shutil
+    from pathlib import Path
+    
+    temp_file_path = None
+    
+    try:
+        from ocr.ocr_service import OCRService
+        
+        # 保存上传的文件
+        file_suffix = Path(file.filename).suffix.lower()
+        
+        # 验证文件类型
+        allowed_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp', '.pdf']
+        if file_suffix not in allowed_extensions:
+            return {
+                "success": False,
+                "error": f"不支持的文件类型: {file_suffix}。OCR支持的类型: {', '.join(allowed_extensions)}"
+            }
+        
+        # 创建临时文件
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_suffix) as temp_file:
+            temp_file_path = temp_file.name
+            shutil.copyfileobj(file.file, temp_file)
+        
+        logger.info(f"OCR处理文件: {file.filename}")
+        
+        # 调用OCR服务
+        ocr_service = OCRService()
+        result = ocr_service.process_file(temp_file_path, enable_structure=enable_structure)
+        
+        return {
+            "success": result.get("success", False),
+            "filename": file.filename,
+            "text": result.get("text", ""),
+            "text_lines": result.get("text_lines", []),
+            "structure": result.get("structure", {}),
+            "total_pages": result.get("total_pages", 1),
+            "error": result.get("error", "")
+        }
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {
+            "success": False,
+            "error": f"OCR处理失败: {str(e)}"
+        }
+    finally:
+        # 清理临时文件
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.unlink(temp_file_path)
+            except Exception as e:
+                logger.warning(f"清理临时文件失败: {str(e)}")
+
+@app.post("/api/parse_document")
+async def parse_document(file: UploadFile = File(...)):
+    """
+    仅进行文档解析，不生成AI回复
+    """
+    import tempfile
+    import shutil
+    from pathlib import Path
+    
+    temp_file_path = None
+    
+    try:
+        from document_parser.document_parser_service import DocumentParserService
+        
+        # 保存上传的文件
+        file_suffix = Path(file.filename).suffix.lower()
+        
+        # 验证文件类型
+        allowed_extensions = ['.pdf', '.xlsx', '.xls', '.docx', '.doc']
+        if file_suffix not in allowed_extensions:
+            return {
+                "success": False,
+                "error": f"不支持的文件类型: {file_suffix}。支持的类型: {', '.join(allowed_extensions)}"
+            }
+        
+        # 创建临时文件
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_suffix) as temp_file:
+            temp_file_path = temp_file.name
+            shutil.copyfileobj(file.file, temp_file)
+        
+        logger.info(f"文档解析: {file.filename}")
+        
+        # 调用文档解析服务
+        parser = DocumentParserService()
+        result = parser.parse_document(temp_file_path)
+        
+        return {
+            "success": result.get("success", False),
+            "filename": file.filename,
+            "file_type": result.get("file_type", "unknown"),
+            "full_text": result.get("full_text", ""),
+            "metadata": result.get("metadata", {}),
+            "total_pages": result.get("total_pages", 0),
+            "total_sheets": result.get("total_sheets", 0),
+            "total_paragraphs": result.get("total_paragraphs", 0),
+            "error": result.get("error", "")
+        }
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {
+            "success": False,
+            "error": f"文档解析失败: {str(e)}"
+        }
+    finally:
+        # 清理临时文件
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.unlink(temp_file_path)
+            except Exception as e:
+                logger.warning(f"清理临时文件失败: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

@@ -5,6 +5,12 @@
       "src/mcp_server/mcp_server_time.py"
     ],
     "transport": "stdio"
+  },
+  "web_search": {
+    "command": "python",
+    "args": [
+      "src/mcp_server/mcp_server_web_search.py"
+    ],
+    "transport": "stdio"
   }
 }
-

@@ -354,12 +354,16 @@
                 <input v-model="inputMessage" 
                        @keyup.enter="sendMessage" 
                        placeholder="输入消息..." 
-                       :disabled="sending || recording">
-                <button @click="sendMessage" :disabled="sending || !inputMessage || recording">
+                       :disabled="sending || recording || uploading">
+                <button @click="sendMessage" :disabled="sending || !inputMessage || recording || uploading">
                     {{ sending ? '发送中...' : '发送' }}
                 </button>
-                <button @click="toggleRecording" :disabled="sending">
+                <button @click="toggleRecording" :disabled="sending || uploading">
                     {{ recording ? '停止录音' : '语音输入' }}
+                </button>
+                <input type="file" ref="fileInput" @change="handleFileUpload" style="display: none" accept=".png,.jpg,.jpeg,.bmp,.tiff,.webp,.pdf,.xlsx,.xls,.docx,.doc">
+                <button @click="$refs.fileInput.click()" :disabled="sending || recording || uploading">
+                    {{ uploading ? '上传中...' : '上传文件' }}
                 </button>
                 <button @click="resetSession" style="margin-left: 10px; background-color: #ff6b6b;">
                     重置
@@ -402,6 +406,10 @@
                 const recordingStatus = ref('');
                 const currentTranscript = ref('');
                 const audioVisualizer = ref(null);
+                
+                // 文件上传相关状态变量
+                const uploading = ref(false);
+                const fileInput = ref(null);
                 
                 // 音频相关变量
                 let mediaRecorder = null;
@@ -937,6 +945,88 @@
                     }
                 };
                 
+                // 文件上传处理
+                const handleFileUpload = async (event) => {
+                    const file = event.target.files[0];
+                    if (!file) return;
+                    
+                    try {
+                        uploading.value = true;
+                        
+                        // 添加用户消息到界面
+                        messages.value.push({
+                            role: 'user',
+                            type: 'text',
+                            content: `上传文件: ${file.name}`
+                        });
+                        
+                        // 准备FormData
+                        const formData = new FormData();
+                        formData.append('file', file);
+                        formData.append('conversation_id', sessionId.value);
+                        
+                        // 发送到后端
+                        const response = await fetch('http://localhost:8000/api/upload_file', {
+                            method: 'POST',
+                            body: formData,
+                            mode: 'cors',
+                            cache: 'no-cache'
+                        });
+                        
+                        if (!response.ok) {
+                            const errorData = await response.json().catch(() => ({}));
+                            throw new Error(`文件上传失败: ${JSON.stringify(errorData)}`);
+                        }
+                        
+                        const result = await response.json();
+                        console.log('文件处理结果:', result);
+                        
+                        // 添加助手回复到界面
+                        if (result.success) {
+                            // 显示提取的文本（如果有的话）
+                            if (result.extracted_text) {
+                                const previewText = result.extracted_text.substring(0, 500) + 
+                                    (result.extracted_text.length > 500 ? '...' : '');
+                                
+                                messages.value.push({
+                                    role: 'assistant',
+                                    type: 'text',
+                                    content: `文件处理成功！\n文件类型: ${result.file_type}\n提取文本预览:\n${previewText}`
+                                });
+                            }
+                            
+                            // 显示AI回复
+                            if (result.response) {
+                                messages.value.push({
+                                    role: 'assistant',
+                                    type: 'text',
+                                    content: result.response
+                                });
+                            }
+                        } else {
+                            messages.value.push({
+                                role: 'assistant',
+                                type: 'error',
+                                content: `文件处理失败: ${result.error}`
+                            });
+                        }
+                        
+                        scrollToBottom();
+                        
+                    } catch (error) {
+                        console.error('文件上传失败:', error);
+                        messages.value.push({
+                            role: 'assistant',
+                            type: 'error',
+                            content: `文件上传失败: ${error.message}`
+                        });
+                    } finally {
+                        uploading.value = false;
+                        // 清空文件输入
+                        event.target.value = '';
+                    }
+                };
+                
                 // 组件挂载时获取模型列表
                 onMounted(() => {
                     fetchModels();
@@ -963,7 +1053,11 @@
                     recordingStatus,
                     currentTranscript,
                     audioVisualizer,
-                    toggleRecording
+                    toggleRecording,
+                    // 文件上传相关
+                    uploading,
+                    fileInput,
+                    handleFileUpload
                 };
             }
         }).mount('#app');

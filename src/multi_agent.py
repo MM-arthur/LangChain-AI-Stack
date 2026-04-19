@@ -1,6 +1,7 @@
 # 统一LangGraph智能体实现 - 面试助手Agent
 
 import os
+import sys
 import json
 from typing import Dict, Any, List, TypedDict, Annotated, Optional
 from dotenv import load_dotenv
@@ -13,21 +14,25 @@ from langgraph.checkpoint.memory import MemorySaver
 from pathlib import Path
 import operator
 
+# 添加项目根目录到 sys.path
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
+
 try:
-    from ocr.ocr_service import OCRService
+    from src.ocr.ocr_service import OCRService
     OCR_AVAILABLE = True
 except ImportError:
     OCR_AVAILABLE = False
-    print("⚠️  OCR服务未安装，OCR功能将不可用")
+    print("OCR service not installed, OCR will be unavailable")
 
 try:
-    from document_parser.document_parser_service import DocumentParserService
+    from src.document_parser.document_parser_service import DocumentParserService
     DOCUMENT_PARSER_AVAILABLE = True
 except ImportError:
     DOCUMENT_PARSER_AVAILABLE = False
-    print("⚠️  文档解析服务未安装，文档解析功能将不可用")
+    print("Document parser not installed, document parsing will be unavailable")
 
-load_dotenv(dotenv_path=Path(__file__).parent / ".env")
+load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
 
 OUTPUT_TOKEN_INFO = {
     "moonshot-v1-8k": {"max_tokens": 8000},
@@ -66,16 +71,28 @@ class AgentState(TypedDict):
     rag_sources: Optional[List[str]]
     web_search_result: Optional[str]
     web_sources: Optional[List[str]]
+    # 行为分析结果
+    behavior_result: Optional[Dict[str, Any]]
+    video_frame_data: Optional[str]  # base64 编码的视频帧
 
 def pre_router(state: Dict[str, Any]) -> Dict[str, Any]:
     """
-    🟢 Tool Node - 前置路由：判断是否有文件需要上传
+    🟢 Tool Node - 前置路由：判断是否有文件需要上传或视频帧数据
     """
     file_path = state.get("file_path", "")
-    
+    video_frame_data = state.get("video_frame_data", "")
+
+    # 优先检测视频帧数据（来自摄像头）
+    if video_frame_data:
+        print(f"📹 检测到视频帧数据，进行行为分析")
+        return {
+            **state,
+            "pre_route": "video_input"
+        }
+
     if file_path and os.path.exists(file_path):
         file_ext = Path(file_path).suffix.lower()
-        
+
         if file_ext in ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp', '.pdf']:
             print(f"📁 检测到图片/PDF文件: {file_path}")
             return {
@@ -219,6 +236,59 @@ def document_parsing(state: Dict[str, Any]) -> Dict[str, Any]:
             **state,
             "document_content": f"文档解析异常: {str(e)}",
             "transcript": f"文档解析异常: {str(e)}"
+        }
+
+def behavior_detection(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    🩵 Local Model Node - 面试官行为分析（YOLO目标检测 + 姿态估计）
+    分析内容：面试官的人体检测、面部表情、视线方向、坐姿姿态、注意力水平
+    帮助作为面试者的你更好地了解面试官的状态和反应
+    """
+    try:
+        from src.behavior_detection.behavior_analyzer import BehaviorAnalyzer
+
+        video_frame_data = state.get("video_frame_data", "")
+        file_path = state.get("file_path", "")
+
+        analyzer = BehaviorAnalyzer()
+
+        if video_frame_data:
+            print(f"📹 开始分析面试官视频帧...")
+            result = analyzer.analyze_video_frame(video_frame_data)
+        elif file_path and os.path.exists(file_path):
+            print(f"📹 开始分析面试官图像: {file_path}")
+            result = analyzer.analyze_image_file(file_path)
+        else:
+            print(f"⚠️  未提供视频帧数据或文件路径")
+            result = {"success": False, "error": "未提供视频数据"}
+
+        if result.get("success", False):
+            print(f"✅ 面试官行为分析完成")
+            print(f"   姿势: {result.get('posture', {}).get('state', 'unknown')}")
+            print(f"   表情: {result.get('expression', {}).get('state', 'unknown')}")
+            print(f"   视线: {result.get('gaze', {}).get('direction', 'unknown')}")
+            print(f"   注意力: {result.get('attention', {}).get('level', 'unknown')}")
+        else:
+            print(f"❌ 面试官行为分析失败: {result.get('error', '未知错误')}")
+
+        return {
+            **state,
+            "behavior_result": result
+        }
+
+    except ImportError:
+        print("⚠️  行为分析服务未安装")
+        return {
+            **state,
+            "behavior_result": {"success": False, "error": "行为分析模块未安装"}
+        }
+    except Exception as e:
+        print(f"❌ behavior_detection 失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {
+            **state,
+            "behavior_result": {"success": False, "error": str(e)}
         }
 
 def process_speech_to_text(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -666,23 +736,107 @@ def generate_response(state: Dict[str, Any]) -> Dict[str, Any]:
     整合内容、标注数据源、温和回答
     """
     llm = init_llm()
-    
+
     optimized_text = state.get("optimized_text", state.get("input_text", ""))
     rag_result = state.get("rag_result", "")
     rag_sources = state.get("rag_sources", [])
     web_search_result = state.get("web_search_result", "")
     web_sources = state.get("web_sources", [])
-    
+    behavior_result = state.get("behavior_result", {})
+
     context = ""
     sources_str = ""
-    
-    if rag_result:
+
+    # 处理行为分析结果
+    if behavior_result and behavior_result.get("success", False):
+        posture = behavior_result.get("posture", {})
+        expression = behavior_result.get("expression", {})
+        gaze = behavior_result.get("gaze", {})
+        attention = behavior_result.get("attention", {})
+        warnings = behavior_result.get("warnings", [])
+
+        behavior_desc = f"""【面试官行为分析】
+- 坐姿状态：{posture.get('state', 'unknown')}（置信度: {posture.get('confidence', 0):.0%}）
+- 面部表情：{expression.get('state', 'unknown')}（置信度: {expression.get('confidence', 0):.0%}）
+- 视线方向：{gaze.get('direction', 'unknown')}（置信度: {gaze.get('confidence', 0):.0%}）
+- 注意力水平：{attention.get('level', 'unknown')}（得分: {attention.get('score', 0):.0%}）
+"""
+
+        if warnings:
+            behavior_desc += f"- 警告信息：{'；'.join(warnings)}"
+
+        context = behavior_desc
+
+    elif rag_result:
         context = f"【本地知识库检索内容】\n{rag_result}"
         sources_str = "\n".join([f"- {s}" for s in rag_sources[:3]])
     elif web_search_result:
         context = f"【网页搜索内容】\n{web_search_result}"
         sources_str = "\n".join([f"- {s}" for s in web_sources[:3]])
-    
+
+    # 如果是行为分析，生成专门的面试官分析反馈
+    if behavior_result and behavior_result.get("success", False):
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", """你是一个专业的面试观察助手。
+
+**你的身份**：
+- 你在帮助面试者（用户）分析面试官的行为
+- 用户不是面试官，而是来参加面试的候选人
+
+**分析维度**：
+1. 表情：面试官表情是否严肃/友善/中性？是否在思考？
+2. 视线：面试官视线在哪里？是在看你、看屏幕、还是走神？
+3. 姿势：面试官坐姿是否放松？身体前倾表示感兴趣？
+4. 注意力：面试官是否专注？还是显得不耐烦？
+
+**输出要求**：
+1. 先给出一个总体判断（1-2句话）
+2. 针对每个维度给出简短分析
+3. 根据面试官的状态，给出应对建议
+4. 保持积极正面的语气，帮助用户建立信心
+
+**格式**：
+【面试官状态】
+...（整体评价）
+
+【细节观察】
+- 表情：...
+- 视线：...
+- 姿势：...
+- 注意力：...
+
+【应对建议】
+...（如何调整自己的回答策略）"""),
+            ("human", "{behavior_analysis}")
+        ])
+
+        chain = prompt | llm
+
+        try:
+            response = chain.invoke({
+                "behavior_analysis": context
+            })
+
+            final_response = response.content
+
+            print(f"✅ 行为分析回复生成完成")
+
+            return {
+                **state,
+                "response": final_response,
+                "history": state.get("history", []) + [
+                    {"role": "user", "content": "分析面试官行为"},
+                    {"role": "assistant", "content": final_response}
+                ]
+            }
+        except Exception as e:
+            print(f"❌ generate_response 失败: {str(e)}")
+            return {
+                **state,
+                "response": f"抱歉，生成回复时出现错误: {str(e)}",
+                "history": state.get("history", [])
+            }
+
     prompt = ChatPromptTemplate.from_messages([
         ("system", """你是Arthur的个人面试助手。
 
@@ -710,20 +864,20 @@ def generate_response(state: Dict[str, Any]) -> Dict[str, Any]:
 数据来源：
 {sources}""")
     ])
-    
+
     chain = prompt | llm
-    
+
     try:
         response = chain.invoke({
             "question": optimized_text,
             "context": context if context else "（无检索内容，请根据自身知识回答）",
             "sources": sources_str if sources_str else "（无外部数据来源）"
         })
-        
+
         final_response = response.content
-        
+
         print(f"✅ 生成回复完成")
-        
+
         return {
             **state,
             "response": final_response,
@@ -756,6 +910,7 @@ def create_multi_agent():
     workflow.add_node("pre_router", pre_router)
     workflow.add_node("ocr_processing", ocr_processing)
     workflow.add_node("document_parsing", document_parsing)
+    workflow.add_node("behavior_detection", behavior_detection)  # YOLO行为分析节点
     workflow.add_node("process_speech_to_text", process_speech_to_text)
     workflow.add_node("optimize_transcript", optimize_transcript)
     workflow.add_node("intent_recognition", intent_recognition)
@@ -763,31 +918,35 @@ def create_multi_agent():
     workflow.add_node("rag_processing", rag_processing)
     workflow.add_node("web_search", web_search)
     workflow.add_node("generate_response", generate_response)
-    
+
     workflow.set_entry_point("pre_router")
-    
+
     def pre_route_decision(state: Dict[str, Any]) -> str:
         pre_route = state.get("pre_route", "text_input")
-        
+
         if pre_route == "file_ocr":
             return "ocr_processing"
         elif pre_route == "file_document":
             return "document_parsing"
+        elif pre_route == "video_input":
+            return "behavior_detection"
         else:
             return "process_speech_to_text"
-    
+
     workflow.add_conditional_edges(
         "pre_router",
         pre_route_decision,
         {
             "ocr_processing": "ocr_processing",
             "document_parsing": "document_parsing",
+            "behavior_detection": "behavior_detection",
             "process_speech_to_text": "process_speech_to_text"
         }
     )
-    
+
     workflow.add_edge("ocr_processing", "process_speech_to_text")
     workflow.add_edge("document_parsing", "process_speech_to_text")
+    workflow.add_edge("behavior_detection", "generate_response")  # 行为分析直接生成回复
     workflow.add_edge("process_speech_to_text", "optimize_transcript")
     workflow.add_edge("optimize_transcript", "intent_recognition")
     workflow.add_edge("intent_recognition", "agent_router")

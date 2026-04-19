@@ -2,7 +2,9 @@ import sys
 import os
 import logging
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# 添加项目根目录到 sys.path
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
 
 from fastapi import FastAPI, WebSocket, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,9 +21,10 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
 
-from speech_recognition.speech_to_text import SpeechToTextService
+from src.speech_recognition.speech_to_text import SpeechToTextService
+from src.speech_recognition.sensevoice import WhisperService
 
-from multi_agent import create_multi_agent
+from src.multi_agent import create_multi_agent
 
 load_dotenv(override=True)
 
@@ -46,6 +49,10 @@ sessions: Dict[str, Dict[str, Any]] = {}
 
 # 全局变量 - 语音转文字服务
 stt_service = None
+sensevoice_service = None
+
+# 语音识别引擎选择: "paddlespeech" / "sensevoice"
+SPEECH_ENGINE = os.getenv("SPEECH_ENGINE", "sensevoice")
 
 # 全局变量 - 对话历史
 conversation_history = {}
@@ -106,6 +113,19 @@ async def cleanup_mcp_client(session_id: str):
     if session_id in sessions and sessions[session_id].get("mcp_client"):
         # 清理逻辑（如果需要）
         sessions[session_id]["mcp_client"] = None
+
+def get_speech_service():
+    """获取语音识别服务实例"""
+    global sensevoice_service, stt_service
+
+    if SPEECH_ENGINE == "sensevoice":
+        if sensevoice_service is None:
+            sensevoice_service = WhisperService()
+        return sensevoice_service
+    else:
+        if stt_service is None:
+            stt_service = SpeechToTextService()
+        return stt_service
 
 async def initialize_agent(session_id: str, model_name: str, mcp_config: Dict[str, Any]):
     """初始化AI代理"""
@@ -374,12 +394,10 @@ async def process_audio(
     """
     try:
         # 1. 语音转文字
-        global stt_service
-        if stt_service is None:
-            stt_service = SpeechToTextService()
-        
+        speech_service = get_speech_service()
+
         # 修复：确保audio对象被正确处理
-        transcript = await stt_service.convert_audio_to_text(audio)
+        transcript = await speech_service.convert_audio_to_text(audio)
         
         if "失败" in transcript or "无法识别" in transcript:
             return {"error": transcript}
@@ -422,10 +440,8 @@ async def speech_to_text(audio: UploadFile = File(...)):
     仅处理语音转文字，不生成AI回复
     """
     try:
-        global stt_service
-        if stt_service is None:
-            stt_service = SpeechToTextService()
-        transcript = await stt_service.convert_audio_to_text(audio)
+        speech_service = get_speech_service()
+        transcript = await speech_service.convert_audio_to_text(audio)
         
         if "失败" in transcript or "无法识别" in transcript:
             return {"error": transcript}
@@ -459,6 +475,74 @@ async def health_check():
         "status": "ok",
         "service": "融合智能体API"
     }
+
+@app.post("/api/analyze_behavior")
+async def analyze_behavior(
+    frame: UploadFile = File(...),
+    conversation_id: str = Form(default="default")
+):
+    """
+    分析面试官行为（从摄像头视频帧）
+    接收前端上传的视频帧图片，分析面试官的表情、视线、注意力等
+    帮助作为面试者的你更好地了解面试官的状态
+    """
+    import base64
+    import tempfile
+    import shutil
+    from pathlib import Path
+
+    temp_file_path = None
+
+    try:
+        # 读取视频帧文件
+        file_content = await frame.read()
+
+        if len(file_content) == 0:
+            return {"success": False, "error": "上传的文件为空"}
+
+        # 转换为 base64
+        frame_base64 = base64.b64encode(file_content).decode('utf-8')
+
+        logger.info(f"收到视频帧，大小: {len(file_content)} bytes")
+
+        # 调用统一的 LangGraph Agent 处理
+        agent = create_multi_agent()
+
+        # 获取对话历史
+        history = conversation_history.get(conversation_id, [])
+
+        # 构建输入 - 分析面试官
+        agent_input = {
+            "input_text": "分析面试官的行为和状态",
+            "video_frame_data": frame_base64,
+            "history": history,
+            "pre_route": "video_input"
+        }
+
+        # 调用 Agent
+        result = agent.invoke(agent_input)
+
+        # 更新对话历史
+        conversation_history[conversation_id] = result.get("history", [])
+
+        # 返回结果
+        return {
+            "success": True,
+            "behavior_result": result.get("behavior_result", {}),
+            "response": result.get("response", ""),
+            "conversation_id": conversation_id
+        }
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"success": False, "error": f"行为分析失败: {str(e)}"}
+    finally:
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.unlink(temp_file_path)
+            except Exception:
+                pass
 
 @app.post("/api/upload_file")
 async def upload_file(

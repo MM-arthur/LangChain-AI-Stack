@@ -9,6 +9,13 @@ config.py
 *.log
 # 模型文件（大型二进制文件）
 src/rag/models/
+models/
 # IDE配置文件
 .vscode/
 .idea/
+.trae/
+.agents/
+skills-lock.json
+yolov8n.pt
+scripts/
+exp/

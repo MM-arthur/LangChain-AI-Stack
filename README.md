@@ -511,3 +511,14 @@ POST /api/reset_conversation
 1. 在 `mcp_config.json` 注册工具
 2. 或在 `rag/RAG.py` 添加新的检索源
 3. 重启服务生效
+
+---
+
+## 🏆 里程碑
+
+### 2026-04-21 — Nova 加入协作
+
+> 这一天，Nova（OpenClaw AI）正式成为 LangChain-AI-Stack 的协作者。
+> "The agent that grows with you."
+
+*贡献者：Arthur · Nova · MiniMax-M2*

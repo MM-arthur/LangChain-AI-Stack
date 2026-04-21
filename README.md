@@ -1,24 +1,45 @@
-***
-
-name: langchain-ai-stack
-description: 基于 LangGraph 的面试助手智能体，支持语音问答（中英双语）、面试官行为分析（YOLO）、智能路由问答、RAG 检索增强、网页搜索。
------------------------------------------------------------------------------------
-
 # LangChain AI Stack - 面试助手智能体
 
-## Overview
+> 基于 **LangGraph** + **Hermes 架构思想** 的智能面试助手。
+> 单例 Agent + 会话隔离 + 流式事件驱动。
 
-基于 **LangGraph** 的智能面试助手，帮助你（面试者）回答面试官问题。
+---
 
-**核心功能：**
+## 核心架构：单例 Agent + 分层会话管理
 
-- 语音问答（中英双语）
-- 面试官行为分析（YOLO）
-- 智能问答路由
-- 文件处理（OCR/文档解析）
-- 面试场景专业回复
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     AgentSingleton                          │
+│              （进程启动时一次性编译，永不重建）                  │
+│                                                             │
+│   ┌─────────────────────────────────────────────────────┐   │
+│   │           Compiled LangGraph StateGraph              │   │
+│   │   pre_router → intent → router → rag/search/generate │   │
+│   └─────────────────────────────────────────────────────┘   │
+└─────────────────────────┬───────────────────────────────────┘
+                          │ session_id (thread_id)
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    SessionManager                           │
+│              （每个 session 一个 checkpointer）                │
+│                                                             │
+│   session_a ──→ MemorySaver (a) ──→ 独立状态                │
+│   session_b ──→ MemorySaver (b) ──→ 独立状态                │
+│   session_c ──→ MemorySaver (c) ──→ 独立状态                │
+│                                                             │
+│   + MCP client per session（工具集）                         │
+│   + conversation_history per session                        │
+└─────────────────────────────────────────────────────────────┘
+```
 
-***
+**设计原则（Hermes 思想）：**
+
+- **一个 Agent 单例，服务所有会话** — 进程级单例，节省编译开销
+- **会话隔离靠 Checkpointer** — 每个 session_id 对应独立 MemorySaver 快照
+- **工具集按会话加载** — MCP client 独立管理，不跨会话污染
+- **渐进式记忆** — 短期会话历史 + 长期 RAG 知识库，分层设计
+
+---
 
 ## 快速启动
 
@@ -42,23 +63,40 @@ SPEECH_ENGINE=funasr
 ### Step 3: 启动服务
 
 ```bash
-# 终端 1: 后端 API
+# 启动后端（自动初始化 Agent 单例）
 python -m src.main
 
-# 终端 2: 前端界面
+# 启动前端（另一个终端）
 cd src/ui && python -m http.server 8080
 ```
 
-**首次使用语音识别会自动下载模型（约 944MB），存放在：**
+**首次启动时，你会看到：**
 
-- `~/.cache/modelscope/hub/models/iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch/`
+```
+[AgentSingleton] LangGraph 编译完成，节点数: 11
+[SessionManager] 初始化完成，等待会话请求
+```
+
+> ⚠️ 每次修改 `multi_agent.py` 后需重启服务以重新编译 Agent 图
 
 ### Step 4: 访问
 
 - API 文档: <http://localhost:8000/docs>
 - 前端界面: <http://localhost:8080>
 
-***
+---
+
+## 与 Hermes Agent 的设计对照
+
+| 维度 | Hermes Agent | LangChain-AI-Stack（本项目） |
+|------|-------------|--------------------------|
+| 单例模式 | AIAgent 单例，服务所有入口 | `AgentSingleton` 编译一次，服务所有 session |
+| 会话隔离 | SQLite + FTS5 per session | `MemorySaver` per session_id（LangGraph thread） |
+| 工具管理 | 47 注册工具，19 工具集 | `MultiServerMCPClient` per session |
+| 记忆分层 | MEMORY.md + USER.md + 会话历史 | `conversation_history`（会话）+ RAG（长期知识） |
+| 平台入口 | CLI / Gateway / ACP / Batch / API | WebSocket / REST API |
+
+---
 
 ## 智能体架构
 
@@ -124,39 +162,51 @@ graph TD
     style CHECK fill:#ff9800,color:#fff
 ```
 
-***
+---
+
+## 与传统实现的关键区别
+
+| 问题 | 传统实现（修改前） | 当前实现（修改后） |
+|------|----------------|----------------|
+| Agent 实例 | 每次请求 `create_multi_agent()` 重新编译 | 进程启动时一次性编译全局单例 |
+| 会话状态 | 两个全局 `dict`（sessions + conversation_history）分散管理 | `SessionManager` 统一管理生命周期 |
+| Checkpointer | 只有 `/api/initialize` 路径用了 MemorySaver | 每个 session 自动分配独立 checkpointer |
+| MCP 工具 | 每个 session 都重新加载 | 单例加载一次，按需传递给各 session |
+| WebSocket vs REST | 两套 agent 实例，互不感知 | 共用 `AgentSingleton`，差异化靠 session config |
+
+---
 
 ## 节点详解
 
 ### 节点类型
 
-| 颜色    | 类型               | 说明                           |
-| ----- | ---------------- | ---------------------------- |
-| 🔵 蓝色 | LLM Node         | 云端大语言模型调用                    |
+| 颜色 | 类型 | 说明 |
+|------|------|------|
+| 🔵 蓝色 | LLM Node | 云端大语言模型调用 |
 | 🩵 青色 | Local Model Node | 本地模型（Whisper/YOLO/PaddleOCR） |
-| 🟢 绿色 | Tool Node        | 纯功能/工具节点                     |
-| 🟠 橙色 | Condition Node   | 条件判断节点                       |
+| 🟢 绿色 | Tool Node | 纯功能/工具节点 |
+| 🟠 橙色 | Condition Node | 条件判断节点 |
 
-***
+---
 
 ### 节点列表
 
-| 节点名称                     | 类型           | 输入                                          | 输出                                       | 功能说明                  |
-| ------------------------ | ------------ | ------------------------------------------- | ---------------------------------------- | --------------------- |
-| `pre_router`             | 🟢 Tool      | input\_text, file\_path, video\_frame\_data | pre\_route                               | 判断输入类型，决定路由           |
-| `ocr_processing`         | 🩵 Local     | file\_path                                  | ocr\_result, transcript                  | PaddleOCR 提取图片/PDF 文字 |
-| `document_parsing`       | 🟢 Tool      | file\_path                                  | document\_content, transcript            | 解析 Excel/Word 文档      |
-| `behavior_detection`     | 🩵 Local     | video\_frame\_data                          | behavior\_result                         | YOLO 分析面试官行为          |
-| `process_speech_to_text` | 🟢 Tool      | input\_text, transcript                     | transcript                               | 统一处理文本输入              |
-| `optimize_transcript`    | 🔵 LLM       | transcript                                  | optimized\_text                          | LLM 润色/规范化文本          |
-| `intent_recognition`     | 🔵 LLM       | optimized\_text                             | intent (question\_type, execution\_plan) | 识别问题类型                |
-| `agent_router`           | 🔵 LLM       | intent                                      | route\_decision                          | 根据意图决定路由              |
-| `rag_processing`         | 🔵 LLM       | optimized\_text                             | rag\_result, rag\_sources                | RAG 检索本地知识库           |
-| `check_rag_result`       | 🟠 Condition | rag\_result                                 | has\_content / no\_content               | 检查 RAG 是否有结果          |
-| `web_search`             | 🔵 LLM       | optimized\_text                             | web\_search\_result, web\_sources        | ReAct Agent 网页搜索      |
-| `generate_response`      | 🔵 LLM       | context (RAG/网页/行为分析)                       | response                                 | 生成最终回复                |
+| 节点名称 | 类型 | 输入 | 输出 | 功能说明 |
+|--------|------|------|------|---------|
+| `pre_router` | 🟢 Tool | input_text, file_path, video_frame_data | pre_route | 判断输入类型，决定路由 |
+| `ocr_processing` | 🩵 Local | file_path | ocr_result, transcript | PaddleOCR 提取图片/PDF 文字 |
+| `document_parsing` | 🟢 Tool | file_path | document_content, transcript | 解析 Excel/Word 文档 |
+| `behavior_detection` | 🩵 Local | video_frame_data | behavior_result | YOLO 分析面试官行为 |
+| `process_speech_to_text` | 🟢 Tool | input_text, transcript | transcript | 统一处理文本输入 |
+| `optimize_transcript` | 🔵 LLM | transcript | optimized_text | LLM 润色/规范化文本 |
+| `intent_recognition` | 🔵 LLM | optimized_text | intent (question_type, execution_plan) | 识别问题类型 |
+| `agent_router` | 🔵 LLM | intent | route_decision | 根据意图决定路由 |
+| `rag_processing` | 🔵 LLM | optimized_text | rag_result, rag_sources | RAG 检索本地知识库 |
+| `check_rag_result` | 🟠 Condition | rag_result | has_content / no_content | 检查 RAG 是否有结果 |
+| `web_search` | 🔵 LLM | optimized_text | web_search_result, web_sources | ReAct Agent 网页搜索 |
+| `generate_response` | 🔵 LLM | context (RAG/网页/行为分析) | response | 生成最终回复 |
 
-***
+---
 
 ## AgentState 定义
 
@@ -183,29 +233,29 @@ classDiagram
     }
 ```
 
-***
+---
 
 ## 输入类型与路由
 
-### pre\_router 路由规则
+### pre_router 路由规则
 
-| 输入类型       | 检测条件                                | 路由目标                     |
-| ---------- | ----------------------------------- | ------------------------ |
-| 视频帧        | video\_frame\_data 非空               | `behavior_detection`     |
-| 图片/PDF     | file\_path 扩展名 \[.png/.jpg/.pdf...] | `ocr_processing`         |
-| Excel/Word | file\_path 扩展名 \[.xlsx/.docx...]    | `document_parsing`       |
-| 文本/语音      | 其他情况                                | `process_speech_to_text` |
+| 输入类型 | 检测条件 | 路由目标 |
+|---------|---------|---------|
+| 视频帧 | video_frame_data 非空 | `behavior_detection` |
+| 图片/PDF | file_path 扩展名 [.png/.jpg/.pdf...] | `ocr_processing` |
+| Excel/Word | file_path 扩展名 [.xlsx/.docx...] | `document_parsing` |
+| 文本/语音 | 其他情况 | `process_speech_to_text` |
 
-### agent\_router 路由规则
+### agent_router 路由规则
 
-| intent.question\_type | 路由目标                | 说明           |
-| --------------------- | ------------------- | ------------ |
-| 技术问题                  | `rag_processing`    | 从本地知识库检索     |
-| 个人问题                  | `rag_processing`    | 从个人简历/项目经验检索 |
-| 最新知识                  | `web_search`        | 需要实时信息       |
-| 开放性问题                 | `generate_response` | 直接生成回复       |
+| intent.question_type | 路由目标 | 说明 |
+|---------------------|---------|------|
+| 技术问题 | `rag_processing` | 从本地知识库检索 |
+| 个人问题 | `rag_processing` | 从个人简历/项目经验检索 |
+| 最新知识 | `web_search` | 需要实时信息 |
+| 开放性问题 | `generate_response` | 直接生成回复 |
 
-***
+---
 
 ## 典型场景
 
@@ -267,20 +317,23 @@ flowchart LR
     F --> I[回复+来源]
 ```
 
-***
+---
 
 ## API 端点
 
-| 端点                      | 方法        | 功能              |
-| ----------------------- | --------- | --------------- |
-| `/ws/chat/{session_id}` | WebSocket | 对话接口            |
-| `/api/process_audio`    | POST      | 语音输入（转文字+AI回复）  |
-| `/api/speech_to_text`   | POST      | 仅语音转文字          |
-| `/api/analyze_behavior` | POST      | 分析面试官行为（视频帧）    |
-| `/api/upload_file`      | POST      | 文件上传（自动 OCR/解析） |
-| `/api/ocr`              | POST      | 仅 OCR 处理        |
-| `/api/parse_document`   | POST      | 仅文档解析           |
-| `/api/config`           | GET       | 获取 MCP 配置       |
+| 端点 | 方法 | 功能 |
+|------|------|------|
+| `/ws/chat/{session_id}` | WebSocket | 对话接口 |
+| `/api/process_audio` | POST | 语音输入（转文字+AI回复） |
+| `/api/speech_to_text` | POST | 仅语音转文字 |
+| `/api/analyze_behavior` | POST | 分析面试官行为（视频帧） |
+| `/api/upload_file` | POST | 文件上传（自动 OCR/解析） |
+| `/api/ocr` | POST | 仅 OCR 处理 |
+| `/api/parse_document` | POST | 仅文档解析 |
+| `/api/config` | GET | 获取 MCP 配置 |
+| `/api/sessions` | GET | 获取所有活跃会话 |
+| `/api/session/{session_id}` | GET | 获取指定会话状态 |
+| `/api/reset_conversation` | POST | 重置会话历史 |
 
 ### 调用示例
 
@@ -318,40 +371,40 @@ ws.onmessage = (event) => {
 };
 ```
 
-***
+---
 
 ## 前端功能
 
-| 按钮       | 功能                  |
-| -------- | ------------------- |
-| 发送       | 发送文本消息              |
-| 语音输入     | 开始/停止语音录制           |
-| 上传文件     | 上传图片/PDF/Excel/Word |
-| **视觉分析** | 开启/关闭摄像头，实时分析面试官行为  |
-| 重置       | 重置会话                |
+| 按钮 | 功能 |
+|------|------|
+| 发送 | 发送文本消息 |
+| 语音输入 | 开始/停止语音录制 |
+| 上传文件 | 上传图片/PDF/Excel/Word |
+| **视觉分析** | 开启/关闭摄像头，实时分析面试官行为 |
+| 重置 | 重置会话 |
 
-***
+---
 
 ## 技术栈
 
-| 类别       | 技术                                 |
-| -------- | ---------------------------------- |
-| Agent 框架 | LangGraph, LangChain               |
-| LLM      | Moonshot AI (moonshot-v1-8k)       |
-| 语音识别     | Funasr Paraformer (中文, ModelScope) |
-| 行为分析     | YOLOv8n (Ultralytics)              |
-| OCR      | PaddleOCR                          |
-| 向量检索     | FAISS, Sentence Transformers       |
-| 搜索       | Tavily API                         |
+| 类别 | 技术 |
+|------|------|
+| Agent 框架 | LangGraph, LangChain |
+| LLM | Moonshot AI (moonshot-v1-8k) |
+| 语音识别 | Funasr Paraformer (中文, ModelScope) |
+| 行为分析 | YOLOv8n (Ultralytics) |
+| OCR | PaddleOCR |
+| 向量检索 | FAISS, Sentence Transformers |
+| 搜索 | Tavily API |
 
-***
+---
 
 ## 项目结构
 
 ```
 LangChain-AI-Stack/
 ├── src/
-│   ├── main.py                      # FastAPI 主服务入口
+│   ├── main.py                      # FastAPI 主服务入口 + SessionManager 单例
 │   ├── multi_agent.py              # LangGraph Agent 定义（核心业务逻辑）
 │   ├── agent_driver.py              # Agent 驱动工具（事件流处理）
 │   ├── speech_recognition/
@@ -382,59 +435,75 @@ LangChain-AI-Stack/
 └── README.md
 ```
 
-***
+---
 
 ## 核心模块说明
 
-### 1. main.py - API 服务入口
+### 1. main.py - API 服务入口 + SessionManager
 
-FastAPI 应用，提供以下主要接口：
+**单例初始化顺序：**
+1. 启动时创建 `AgentSingleton`（编译 LangGraph graph）
+2. 创建 `SessionManager` 单例（管理所有会话）
+3. FastAPI 启动，接受请求
 
-- `WebSocket /ws/chat/{session_id}` - 实时对话
-- `POST /api/process_audio` - 语音处理（转文字+AI回复）
-- `POST /api/analyze_behavior` - 面试官行为分析
-- `POST /api/upload_file` - 文件上传（OCR/文档解析）
+**SessionManager 职责：**
+- `get_agent(session_id)` — 返回该 session 的 agent（绑定独立 checkpointer）
+- `get_history(session_id)` — 获取会话历史
+- `update_history(session_id, history)` — 更新历史
+- `cleanup(session_id)` — 销毁会话
 
-### 2. multi\_agent.py - 核心 Agent 实现
+### 2. multi_agent.py - LangGraph Agent 定义
 
-基于 LangGraph 的智能面试助手，实现以下流程：
+> 核心业务逻辑，定义 11 个节点 + 条件边。
+> `create_multi_agent()` 被 `AgentSingleton` 调用一次，编译后全局共享。
 
-- **pre\_router** → 判断输入类型（文本/语音/文件/视频帧）
-- **ocr\_processing** → 图片/PDF 文字识别
-- **document\_parsing** → Excel/Word 文档解析
-- **behavior\_detection** → YOLO 面试官行为分析
-- **optimize\_transcript** → LLM 文本润色
-- **intent\_recognition** → 意图识别
-- **agent\_router** → 智能路由决策
-- **rag\_processing** → 本地知识库检索
-- **web\_search** → 网页搜索
-- **generate\_response** → 生成最终回复
+### 3. agent_driver.py - 事件流驱动
 
-### 3. agent\_driver.py - 事件流驱动
+> 处理 LangGraph Agent 的流式事件，将细粒度执行事件转换为前端可理解的统一消息格式。
 
-处理 LangGraph Agent 的流式事件，将细粒度执行事件转换为前端可理解的统一消息格式。
-
-### 4. speech\_recognition/ - 语音识别服务
+### 4. speech_recognition/ - 语音识别服务
 
 - `sensevoice.py` - Whisper 语音识别（默认引擎）
 - `speech_to_text.py` - PaddleSpeech 语音识别
 
-### 5. behavior\_detection/ - 行为分析服务
+### 5. behavior_detection/ - 行为分析服务
 
 `behavior_analyzer.py` - YOLOv8n 人体检测 + 姿态/视线/表情分析
 
-***
+---
 
 ## 环境变量配置
 
-| 变量名                | 必填 | 说明                             | 默认值              |
-| ------------------ | -- | ------------------------------ | ---------------- |
-| `MOONSHOT_API_KEY` | 是  | Moonshot AI API 密钥             | -                |
-| `TAVILY_API_KEY`   | 否  | Tavily 搜索 API 密钥               | -                |
-| `SPEECH_ENGINE`    | 否  | 语音引擎 `funasr` 或 `paddlespeech` | `sensevoice`     |
-| `MOONSHOT_MODEL`   | 否  | Moonshot 模型名称                  | `moonshot-v1-8k` |
+| 变量名 | 必填 | 说明 | 默认值 |
+|------|---|------|--- |
+| `MOONSHOT_API_KEY` | 是 | Moonshot AI API 密钥 | - |
+| `TAVILY_API_KEY` | 否 | Tavily 搜索 API 密钥 | - |
+| `SPEECH_ENGINE` | 否 | 语音引擎 `sensevoice` 或 `paddlespeech` | `sensevoice` |
+| `MOONSHOT_MODEL` | 否 | Moonshot 模型名称 | `moonshot-v1-8k` |
 
-***
+---
 
+## 开发指南
 
+### 修改 Agent 逻辑
 
+所有 Agent 节点定义在 `src/multi_agent.py`，修改后需重启服务使单例重新编译。
+
+### 调试会话状态
+
+```bash
+# 查看当前活跃 session
+GET /api/sessions
+
+# 查看指定 session 的状态
+GET /api/session/{session_id}
+
+# 重置指定会话
+POST /api/reset_conversation
+```
+
+### 添加新工具
+
+1. 在 `mcp_config.json` 注册工具
+2. 或在 `rag/RAG.py` 添加新的检索源
+3. 重启服务生效

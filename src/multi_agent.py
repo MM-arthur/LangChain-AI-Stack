@@ -987,19 +987,40 @@ def create_multi_agent():
     
     return agent
 
+# ============================================================
+# 单例模式入口（Hermes 架构思想）
+# 进程启动时调用一次，所有会话共享编译好的 Agent
+# ============================================================
+
+_agent_singleton_instance = None
+
+
+def get_singleton_agent():
+    """
+    返回单例 Agent（编译一次，进程级共享）
+    main.py 在启动时调用此函数初始化 AgentSingleton
+    """
+    global _agent_singleton_instance
+    if _agent_singleton_instance is None:
+        _agent_singleton_instance = create_multi_agent()
+        print(f"[get_singleton_agent] ✅ Agent 编译完成")
+    return _agent_singleton_instance
+
+
 if __name__ == "__main__":
+    # 测试模式：直接运行 multi_agent.py
     agent = create_multi_agent()
-    
+
     test_input = {
         "input_text": "请你解释一下React中的虚拟DOM是什么？它有什么优势？",
         "history": []
     }
-    
-    print("=== 测试打字输入 ===")
+
+    print("=== 测试文本输入 ===")
     result = agent.invoke(test_input)
-    
+
     print(f"\n原始输入：{test_input['input_text']}")
-    print(f"优化后文本：{result['optimized_text']}")
-    print(f"意图识别结果：{result['intent']}")
-    print(f"路由决策：{result['route_decision']}")
-    print(f"生成回复：{result['response']}")
+    print(f"优化后文本：{result.get('optimized_text', '')}")
+    print(f"意图识别结果：{result.get('intent', {})}")
+    print(f"路由决策：{result.get('route_decision', '')}")
+    print(f"生成回复：{result.get('response', '')}")

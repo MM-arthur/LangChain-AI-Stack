@@ -4,7 +4,7 @@
 > 单例 Agent + 会话隔离 + 流式事件驱动。
 
 **Contributors:**
-[![Arthur](https://img.shields.io/badge/Arthur-MM--arthur-blue)](https://github.com/MM-arthur) · [![Nova](https://img.shields.io/badge/Nova-OpenClaw-green)](https://github.com/openclaw) · [![Claude](https://img.shields.io/badge/Claude-Claude--Code-blue)](https://claude.ai) · [![MiniMax](https://img.shields.io/badge/MiniMax-M2-orange)](https://minimax.chat)  
+[![Arthur](https://img.shields.io/badge/Arthur-MM--arthur-blue)](https://github.com/MM-arthur) · [![Nova](https://img.shields.io/badge/Nova-OpenClaw-green)](https://github.com/openclaw) · **MiniMax-M2**  
 *Co-Authored-By: Nova-OpenClaw <nova@openclaw.ai>*
 
 ---

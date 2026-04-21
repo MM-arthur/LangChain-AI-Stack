@@ -3,6 +3,10 @@
 > 基于 **LangGraph** + **Hermes 架构思想** 的智能面试助手。
 > 单例 Agent + 会话隔离 + 流式事件驱动。
 
+**Contributors:**
+[![Arthur](https://img.shields.io/badge/Arthur-MM--arthur-blue)](https://github.com/MM-arthur) · [![Nova](https://img.shields.io/badge/Nova-OpenClaw-green)](https://github.com/openclaw)  
+*Co-Authored-By: Nova-OpenClaw <nova@openclaw.ai>*
+
 ---
 
 ## 核心架构：单例 Agent + 分层会话管理

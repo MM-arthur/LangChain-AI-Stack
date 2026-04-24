@@ -15,7 +15,6 @@ import json
 import uuid
 from dotenv import load_dotenv
 
-from langgraph.checkpoint.memory import MemorySaver
 
 from src.speech_recognition.speech_to_text import SpeechToTextService
 from src.speech_recognition.sensevoice import WhisperService
@@ -64,7 +63,6 @@ class SessionContext:
 
     def __init__(self, session_id: str):
         self.session_id = session_id
-        self.checkpointer = MemorySaver()
         self.history: list = []
         self.created_at = datetime.now()
         self.last_active = datetime.now()
@@ -121,10 +119,6 @@ class SessionManager:
         ctx = self._sessions[session_id]
         ctx.touch()
         return ctx
-
-    def get_checkpointer(self, session_id: str):
-        """获取会话的 checkpointer（用于 LangGraph thread）"""
-        return self.get_session(session_id).checkpointer
 
     def get_history(self, session_id: str) -> list:
         """获取会话历史"""
@@ -281,7 +275,10 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
                     })
                     await websocket.send_json({
                         "type": "complete",
-                        "content": result.get("response", "")
+                        "content": result.get("response", ""),
+                        "intent_mode": result.get("intent_mode", "normal"),
+                        "mock_interview_mode": result.get("mock_interview_mode", False),
+                        "current_round": result.get("current_round", 0)
                     })
 
                 except Exception as e:

@@ -10,6 +10,9 @@ config.py
 # 模型文件（大型二进制文件）
 src/rag/models/
 models/
+# 数据持久化（本地私有）
+data/
+src/rag/faiss_index/
 # IDE配置文件
 .vscode/
 .idea/

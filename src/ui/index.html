@@ -6,237 +6,447 @@
     <title>个人本地面试助手</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <style>
+        :root {
+            --primary: #667eea;
+            --primary-end: #764ba2;
+            --bg-page: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --bg-chat: #fafafa;
+            --bg-container: white;
+            --text-primary: #1a1a2e;
+            --text-secondary: #6b7280;
+            --text-inverse: white;
+            --border: #e5e7eb;
+            --user-bubble: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --assistant-bubble: white;
+            --assistant-border: #e5e7eb;
+            --header-bg: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --input-bg: white;
+            --mode-bar-bg: #f0f0f0;
+            --scrollbar-track: #f1f1f1;
+            --scrollbar-thumb: #c1c1c1;
+        }
+
+        .dark {
+            --bg-page: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            --bg-chat: #0f0f1a;
+            --bg-container: #1a1a2e;
+            --text-primary: #e5e7eb;
+            --text-secondary: #9ca3af;
+            --text-inverse: #1a1a2e;
+            --border: #374151;
+            --assistant-bubble: #1e2433;
+            --assistant-border: #374151;
+            --header-bg: linear-gradient(135deg, #2d2d5a 0%, #1a1a2e 100%);
+            --input-bg: #0f0f1a;
+            --mode-bar-bg: #1e2433;
+            --scrollbar-track: #2d2d5a;
+            --scrollbar-thumb: #4b5563;
+        }
+
         * {
             box-sizing: border-box;
             margin: 0;
             padding: 0;
         }
-        
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             max-width: 900px;
             margin: 0 auto;
             padding: 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: var(--bg-page);
             min-height: 100vh;
         }
-        
+
         .chat-container {
-            background-color: white;
-            border-radius: 16px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            background-color: var(--bg-container);
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
             overflow: hidden;
-            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            transition: all 0.3s ease;
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 40px);
+            max-height: 800px;
         }
-        
-        .chat-container:hover {
-            box-shadow: 0 15px 40px rgba(0, 0, 0, 0.25);
-        }
-        
+
         .chat-header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 25px;
-            text-align: center;
-            position: relative;
-            overflow: hidden;
+            background: var(--header-bg);
+            color: var(--text-inverse);
+            padding: 20px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
         }
-        
-        .chat-header::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: -100%;
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
-            animation: shimmer 3s infinite;
+
+        .chat-header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
         }
-        
-        @keyframes shimmer {
-            100% {
-                left: 100%;
-            }
+
+        .chat-header-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
+            background: rgba(255,255,255,0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            font-weight: 700;
         }
-        
-        .chat-header h1 {
-            font-size: 1.8em;
+
+        .chat-header-info h1 {
+            font-size: 1.1em;
             font-weight: 600;
             margin: 0;
-            position: relative;
-            z-index: 1;
+            line-height: 1.2;
         }
-        
+
+        .chat-header-info p {
+            font-size: 0.75em;
+            opacity: 0.8;
+            margin: 0;
+        }
+
+        .chat-header-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .icon-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            border: none;
+            background: rgba(255,255,255,0.15);
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            transition: all 0.2s ease;
+        }
+
+        .icon-btn:hover {
+            background: rgba(255,255,255,0.25);
+            transform: scale(1.05);
+        }
+
         .chat-messages {
-            height: 600px;
+            flex: 1;
             overflow-y: auto;
-            padding: 20px;
-            background-color: #fafafa;
+            padding: 20px 24px;
+            background-color: var(--bg-chat);
+            position: relative;
         }
         
         .chat-messages::-webkit-scrollbar {
-            width: 6px;
+            width: 5px;
         }
-        
+
         .chat-messages::-webkit-scrollbar-track {
-            background: #f1f1f1;
-            border-radius: 3px;
+            background: var(--scrollbar-track);
         }
-        
+
         .chat-messages::-webkit-scrollbar-thumb {
-            background: #c1c1c1;
+            background: var(--scrollbar-thumb);
             border-radius: 3px;
         }
-        
-        .chat-messages::-webkit-scrollbar-thumb:hover {
-            background: #a8a8a8;
-        }
-        
+
         .message {
-            margin-bottom: 18px;
+            margin-bottom: 16px;
+            padding: 0;
+            position: relative;
+            animation: slideIn 0.25s ease;
+            display: flex;
+            flex-direction: column;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.user {
+            align-items: flex-end;
+        }
+
+        .message.assistant {
+            align-items: flex-start;
+        }
+
+        .message-bubble {
+            max-width: 75%;
             padding: 12px 16px;
             border-radius: 18px;
+            line-height: 1.6;
             position: relative;
-            animation: slideIn 0.3s ease;
-            line-height: 1.5;
+            word-break: break-word;
         }
-        
-        @keyframes slideIn {
-            from {
-                opacity: 0;
-                transform: translateY(10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
+
+        .user .message-bubble {
+            background: var(--user-bubble);
+            color: var(--text-inverse);
+            border-bottom-right-radius: 6px;
+            box-shadow: 0 2px 12px rgba(102, 126, 234, 0.35);
         }
-        
-        .user-message {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            margin-left: 25%;
-            border-bottom-right-radius: 4px;
-            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+
+        .assistant .message-bubble {
+            background: var(--assistant-bubble);
+            color: var(--text-primary);
+            border: 1px solid var(--assistant-border);
+            border-bottom-left-radius: 6px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
         }
-        
-        .assistant-message {
-            background-color: white;
-            color: #333;
-            margin-right: 25%;
-            border-bottom-left-radius: 4px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-            border: 1px solid #e0e0e0;
+
+        .message-meta {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+            padding: 0 4px;
         }
-        
+
+        .user .message-meta {
+            text-align: right;
+        }
+
+        /* Markdown inside bubbles */
+        .message-bubble p { margin: 0 0 8px 0; }
+        .message-bubble p:last-child { margin-bottom: 0; }
+        .message-bubble strong { font-weight: 600; }
+        .message-bubble em { font-style: italic; }
+        .message-bubble ul, .message-bubble ol {
+            margin: 6px 0;
+            padding-left: 20px;
+        }
+        .message-bubble li { margin: 3px 0; }
+        .message-bubble code {
+            background: rgba(0,0,0,0.06);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 0.88em;
+        }
+        .dark .message-bubble code {
+            background: rgba(255,255,255,0.1);
+        }
+        .message-bubble pre {
+            background: #1e1e1e;
+            border-radius: 10px;
+            padding: 14px;
+            margin: 8px 0;
+            overflow-x: auto;
+        }
+        .message-bubble pre code {
+            background: none;
+            padding: 0;
+            color: #d4d4d4;
+            font-size: 0.85em;
+        }
+        .message-bubble blockquote {
+            border-left: 3px solid var(--primary);
+            margin: 8px 0;
+            padding-left: 12px;
+            color: var(--text-secondary);
+        }
+
         .tool-message {
             background-color: #fff3e0;
             border-left: 4px solid #ff9800;
             margin-right: 20%;
             border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(255, 152, 0, 0.15);
         }
-        
+
         .tool-response-message {
             background-color: #e8f5e9;
             border-left: 4px solid #4caf50;
             margin-right: 20%;
             border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(76, 175, 80, 0.15);
+        }
+
+        /* 打字动画 */
+        .typing-indicator {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 12px 16px;
+            background: var(--assistant-bubble);
+            border: 1px solid var(--assistant-border);
+            border-radius: 18px;
+            border-bottom-left-radius: 6px;
+            width: fit-content;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+
+        .typing-dot {
+            width: 7px;
+            height: 7px;
+            background: var(--text-secondary);
+            border-radius: 50%;
+            animation: typingBounce 1.4s infinite ease-in-out both;
+        }
+        .typing-dot:nth-child(1) { animation-delay: -0.32s; }
+        .typing-dot:nth-child(2) { animation-delay: -0.16s; }
+
+        @keyframes typingBounce {
+            0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+            40% { transform: scale(1); opacity: 1; }
+        }
+
+        /* 滚动到底部按钮 */
+        .scroll-to-bottom {
+            position: absolute;
+            bottom: 16px;
+            right: 24px;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            border: none;
+            background: var(--primary);
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4);
+            transition: all 0.2s ease;
+            z-index: 10;
+        }
+        .scroll-to-bottom:hover {
+            transform: scale(1.08);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
         }
         
         .chat-input {
             display: flex;
-            padding: 20px;
-            border-top: 1px solid #eee;
-            background-color: white;
+            padding: 16px 20px;
+            border-top: 1px solid var(--border);
+            background-color: var(--bg-container);
             gap: 10px;
+            align-items: flex-end;
+            flex-shrink: 0;
         }
-        
-        .chat-input input {
+
+        .chat-input-wrapper {
             flex: 1;
-            padding: 14px 16px;
-            border: 2px solid #e0e0e0;
-            border-radius: 25px;
-            font-size: 16px;
-            transition: border-color 0.3s ease, box-shadow 0.3s ease;
+            position: relative;
         }
-        
-        .chat-input input:focus {
+
+        .chat-input textarea {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1.5px solid var(--border);
+            border-radius: 16px;
+            font-size: 15px;
+            font-family: inherit;
+            background: var(--input-bg);
+            color: var(--text-primary);
+            resize: none;
+            overflow-y: auto;
+            max-height: 120px;
+            min-height: 48px;
+            line-height: 1.5;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .chat-input textarea:focus {
             outline: none;
-            border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.12);
         }
-        
-        .chat-input button {
-            padding: 14px 24px;
+
+        .chat-input-hint {
+            font-size: 11px;
+            color: var(--text-secondary);
+            padding: 4px 8px 0;
+        }
+
+        .chat-input-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .send-btn {
+            width: 46px;
+            height: 46px;
+            border-radius: 14px;
             border: none;
-            border-radius: 25px;
-            cursor: pointer;
-            font-size: 16px;
-            font-weight: 500;
-            transition: all 0.3s ease;
-            min-width: 80px;
-        }
-        
-        .chat-input button:not(:disabled) {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+            cursor: pointer;
+            font-size: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.35);
+            transition: all 0.2s ease;
+            flex-shrink: 0;
         }
-        
-        .chat-input button:not(:disabled):hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+        .send-btn:not(:disabled):hover {
+            transform: translateY(-2px) scale(1.03);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.45);
         }
-        
-        .chat-input button:not(:disabled):active {
-            transform: translateY(0);
-        }
-        
-        .chat-input button:disabled {
-            background-color: #f0f0f0;
-            color: #999;
+        .send-btn:disabled {
+            opacity: 0.5;
             cursor: not-allowed;
+            transform: none;
         }
-        
-        .chat-input button:nth-child(3) {
+
+        .reset-btn {
+            width: 46px;
+            height: 46px;
+            border-radius: 14px;
+            border: none;
             background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
+            color: white;
+            cursor: pointer;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             box-shadow: 0 4px 15px rgba(255, 107, 107, 0.3);
+            transition: all 0.2s ease;
+            flex-shrink: 0;
         }
-        
-        .chat-input button:nth-child(3):hover {
-            box-shadow: 0 6px 20px rgba(255, 107, 107, 0.4);
+        .reset-btn:hover {
+            transform: translateY(-2px) scale(1.03);
         }
-        
+
         .model-selector {
-            padding: 20px;
-            border-bottom: 1px solid #eee;
-            background-color: white;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            background-color: var(--bg-container);
             text-align: center;
         }
-        
+
         .model-selector label {
             font-weight: 500;
-            color: #555;
+            color: var(--text-secondary);
             margin-right: 10px;
-            font-size: 14px;
+            font-size: 13px;
         }
-        
+
         .model-selector select {
-            padding: 10px 14px;
+            padding: 8px 12px;
             border-radius: 8px;
-            border: 2px solid #e0e0e0;
-            font-size: 14px;
-            background-color: white;
+            border: 1.5px solid var(--border);
+            font-size: 13px;
+            background: var(--input-bg);
+            color: var(--text-primary);
             cursor: pointer;
-            transition: border-color 0.3s ease;
-            min-width: 200px;
+            transition: border-color 0.2s ease;
+            min-width: 180px;
         }
-        
+
         .model-selector select:focus {
             outline: none;
-            border-color: #667eea;
+            border-color: var(--primary);
         }
         
         .status {
@@ -409,13 +619,74 @@
             margin: 10px 20px;
             color: #c62828;
         }
+
+        /* 意图模式指示器 */
+        .intent-mode-bar {
+            background: linear-gradient(135deg, #e0e0e0 0%, #f5f5f5 100%);
+            padding: 8px 20px;
+            text-align: center;
+            font-size: 13px;
+            color: #666;
+            border-bottom: 1px solid #e8e8e8;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .intent-mode-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 12px;
+            gap: 5px;
+        }
+
+        .intent-mode-badge.normal {
+            background-color: #f0f0f0;
+            color: #888;
+        }
+
+        .intent-mode-badge.mock_interview {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .intent-mode-badge.interview_review {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            color: white;
+        }
+
+        .intent-mode-badge.career_planning {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+        }
+
+        .mock-round {
+            font-size: 12px;
+            color: #667eea;
+            font-weight: 500;
+        }
     </style>
 </head>
 <body>
     <div id="app">
         <div class="chat-container">
             <div class="chat-header">
-                <h1>个人本地面试助手</h1>
+                <div class="chat-header-left">
+                    <div class="chat-header-avatar">🤖</div>
+                    <div class="chat-header-info">
+                        <h1>AI Coach</h1>
+                        <p>{{ sessionInitialized ? '在线' : '未连接' }}</p>
+                    </div>
+                </div>
+                <div class="chat-header-actions">
+                    <button class="icon-btn" @click="toggleDarkMode" :title="darkMode ? '切换亮色模式' : '切换深色模式'">
+                        {{ darkMode ? '☀️' : '🌙' }}
+                    </button>
+                </div>
             </div>
             
             <div class="model-selector" v-if="!sessionInitialized">
@@ -430,36 +701,59 @@
                 请先选择模型并初始化会话
             </div>
             
-            <div class="chat-messages" v-if="sessionInitialized" ref="messagesContainer">
-                <div v-for="(message, index) in messages" :key="index" 
-                     :class="getMessageClass(message)">
-                    <strong>{{ getMessageRole(message) }}:</strong>
-                    <div v-if="message.type === 'tool'" class="tool-call-content">{{ formatToolCall(message.content) }}</div>
-                    <div v-else>{{ message.content }}</div>
+            <!-- 意图模式指示器 -->
+            <div class="intent-mode-bar" v-if="sessionInitialized">
+                <span class="intent-mode-badge" :class="intentMode">
+                    {{ getIntentModeLabel(intentMode) }}
+                </span>
+                <span class="mock-round" v-if="intentMode === 'mock_interview'">
+                    第 {{ currentRound }} 轮
+                </span>
+            </div>
+
+            <div class="chat-messages" v-if="sessionInitialized" ref="messagesContainer" @scroll="onMessagesScroll">
+                <!-- 打字动画 -->
+                <div v-if="isTyping" class="message assistant">
+                    <div class="typing-indicator">
+                        <span class="typing-dot"></span>
+                        <span class="typing-dot"></span>
+                        <span class="typing-dot"></span>
+                    </div>
                 </div>
+
+                <div v-for="(message, index) in messages" :key="index"
+                     :class="['message', message.role === 'user' ? 'user' : 'assistant']">
+                    <div class="message-bubble" v-html="renderMarkdown(getMessageContent(message))"></div>
+                    <div class="message-meta">{{ formatTime(message.timestamp) }}</div>
+                </div>
+
+                <!-- 滚动到底部按钮 -->
+                <button v-if="showScrollButton" class="scroll-to-bottom" @click="scrollToBottom">
+                    ↓
+                </button>
             </div>
             
             <div class="chat-input" v-if="sessionInitialized">
-                <input v-model="inputMessage"
-                       @keyup.enter="sendMessage"
-                       placeholder="输入消息..."
-                       :disabled="sending || recording || uploading || cameraActive">
-                <button @click="sendMessage" :disabled="sending || !inputMessage || recording || uploading || cameraActive">
-                    {{ sending ? '发送中...' : '发送' }}
-                </button>
-                <button @click="toggleRecording" :disabled="sending || uploading || cameraActive">
-                    {{ recording ? '停止录音' : '语音输入' }}
-                </button>
-                <input type="file" ref="fileInput" @change="handleFileUpload" style="display: none" accept=".png,.jpg,.jpeg,.bmp,.tiff,.webp,.pdf,.xlsx,.xls,.docx,.doc">
-                <button @click="$refs.fileInput.click()" :disabled="sending || recording || uploading || cameraActive">
-                    {{ uploading ? '上传中...' : '上传文件' }}
-                </button>
-                <button @click="toggleCamera" :disabled="sending || recording || uploading" :style="cameraActive ? 'background: linear-gradient(135deg, #4caf50 0%, #2e7d32 100%);' : ''">
-                    {{ cameraActive ? '停止分析' : '视觉分析' }}
-                </button>
-                <button @click="resetSession" style="margin-left: 10px; background-color: #ff6b6b;">
-                    重置
-                </button>
+                <div class="chat-input-wrapper">
+                    <textarea
+                        v-model="inputMessage"
+                        @keydown.enter.exact.prevent="sendMessage"
+                        @keydown.enter.shift.exact=""
+                        placeholder="输入消息...（Enter 发送，Shift+Enter 换行）"
+                        :disabled="sending || recording || uploading || cameraActive"
+                        ref="chatInput"
+                        rows="1"
+                    ></textarea>
+                    <div class="chat-input-hint">Enter 发送 · Shift+Enter 换行</div>
+                </div>
+                <div class="chat-input-actions">
+                    <button class="reset-btn" @click="resetSession" title="重置会话">
+                        ↺
+                    </button>
+                    <button class="send-btn" @click="sendMessage" :disabled="sending || !inputMessage.trim() || recording || uploading || cameraActive">
+                        {{ sending ? '···' : '↑' }}
+                    </button>
+                </div>
             </div>
             
             <!-- 语音录制相关UI -->
@@ -522,6 +816,9 @@
                 const sending = ref(false);
                 const inputMessage = ref('');
                 const messages = ref([]);
+                const isTyping = ref(false);
+                const showScrollButton = ref(false);
+                const darkMode = ref(false);
                 const sessionId = ref('session_' + Date.now());
                 const websocket = ref(null);
                 const messagesContainer = ref(null);
@@ -541,6 +838,11 @@
                 const cameraError = ref('');
                 const behaviorResult = ref(null);
                 const cameraVideo = ref(null);
+                
+                // 意图模式状态变量
+                const intentMode = ref('normal');
+                const mockInterviewMode = ref(false);
+                const currentRound = ref(0);
                 let cameraStream = null;
                 let cameraInterval = null;
                 
@@ -562,46 +864,75 @@
                         messages.value.push({
                             role: 'assistant',
                             type: 'text',
-                            content: currentAssistantTextBuffer.value
+                            content: currentAssistantTextBuffer.value,
+                            timestamp: Date.now()
                         });
-                        currentAssistantTextBuffer.value = ''; // 清空缓冲器
+                        currentAssistantTextBuffer.value = '';
                     }
+                };
+                
+                // 获取意图模式显示标签
+                const getIntentModeLabel = (mode) => {
+                    const labels = {
+                        'normal': '💬 普通对话',
+                        'mock_interview': '🤝 模拟面试中',
+                        'interview_review': '📋 面试复盘中',
+                        'career_planning': '🧭 职业规划中'
+                    };
+                    return labels[mode] || '💬 普通对话';
+                };
+
+                // 获取消息内容（兼容不同格式）
+                const getMessageContent = (message) => {
+                    return message.content || '';
                 };
 
                 // 获取消息的CSS类
                 const getMessageClass = (message) => {
-                    switch (message.role) {
-                        case 'user':
-                            return 'message user-message';
-                        case 'assistant':
-                            if (message.type === 'tool') {
-                                return 'message tool-message';
-                            } else if (message.type === 'tool_response') {
-                                return 'message tool-response-message';
-                            } else {
-                                return 'message assistant-message';
-                            }
-                        default:
-                            return 'message assistant-message';
-                    }
+                    return message.role === 'user' ? 'message user' : 'message assistant';
                 };
-                
+
                 // 获取消息角色显示名称
                 const getMessageRole = (message) => {
-                    switch (message.role) {
-                        case 'user':
-                            return '你';
-                        case 'assistant':
-                            if (message.type === 'tool') {
-                                return '工具调用';
-                            } else if (message.type === 'tool_response') {
-                                return '工具响应';
-                            } else {
-                                return '助手';
-                            }
-                        default:
-                            return '助手';
-                    }
+                    return message.role === 'user' ? '你' : '助手';
+                };
+
+                // 简单 Markdown 渲染（支持加粗、斜体、代码、链接）
+                const renderMarkdown = (text) => {
+                    if (!text) return '';
+                    let html = text
+                        // 转义 HTML
+                        .replace(/&/g, '&amp;')
+                        .replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;')
+                        // 代码块
+                        .replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
+                        // 行内代码
+                        .replace(/`([^`]+)`/g, '<code>$1</code>')
+                        // 加粗
+                        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+                        // 斜体
+                        .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+                        // 链接
+                        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
+                        // 换行
+                        .replace(/\n/g, '<br>');
+                    return html;
+                };
+
+                // 格式化时间戳
+                const formatTime = (ts) => {
+                    if (!ts) return '';
+                    const d = new Date(ts);
+                    return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+                };
+
+                // 滚动检测（用户上滑时显示回到最新按钮）
+                const onMessagesScroll = () => {
+                    const el = messagesContainer.value;
+                    if (!el) return;
+                    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+                    showScrollButton.value = distFromBottom > 120;
                 };
                 
                 // 格式化工具调用内容
@@ -720,8 +1051,15 @@
                                 break;
                             
                             case 'complete':
-                                flushTextBuffer(); // 会话结束时，将所有缓冲文本推送到消息列表
+                                flushTextBuffer();
                                 sending.value = false;
+                                isTyping.value = false;
+                                // 给所有无 timestamp 的 assistant 消息补上时间
+                                const lastMsg = messages.value.filter(m => m.role === 'assistant' && !m.timestamp).pop();
+                                if (lastMsg) lastMsg.timestamp = Date.now();
+                                intentMode.value = data.intent_mode || 'normal';
+                                mockInterviewMode.value = data.mock_interview_mode || false;
+                                currentRound.value = data.current_round || 0;
                                 scrollToBottom();
                                 break;
                                 
@@ -755,27 +1093,56 @@
                 // 发送消息
                 const sendMessage = () => {
                     if (!inputMessage.value.trim() || sending.value) return;
-                    
-                    // 添加用户消息到界面
+
                     messages.value.push({
                         role: 'user',
                         type: 'text',
-                        content: inputMessage.value
+                        content: inputMessage.value,
+                        timestamp: Date.now()
                     });
-                    
-                    // 重置缓冲器，准备接收新的助手文本
+
                     currentAssistantTextBuffer.value = '';
 
-                    // 通过WebSocket发送
                     if (websocket.value && websocket.value.readyState === WebSocket.OPEN) {
                         websocket.value.send(JSON.stringify({
                             type: 'chat',
                             content: inputMessage.value
                         }));
-                        
+
                         sending.value = true;
+                        isTyping.value = true;
                         inputMessage.value = '';
+                        nextTick(() => autoResizeTextarea());
                         scrollToBottom();
+                    }
+                };
+
+                // 深色模式切换
+                const toggleDarkMode = () => {
+                    darkMode.value = !darkMode.value;
+                    if (darkMode.value) {
+                        document.body.parentElement?.classList.add('dark');
+                        localStorage.setItem('darkMode', '1');
+                    } else {
+                        document.body.parentElement?.classList.remove('dark');
+                        localStorage.setItem('darkMode', '0');
+                    }
+                };
+
+                // 初始化深色模式
+                const initDarkMode = () => {
+                    if (localStorage.getItem('darkMode') === '1') {
+                        darkMode.value = true;
+                        document.body.parentElement?.classList.add('dark');
+                    }
+                };
+
+                // textarea 自动增高
+                const autoResizeTextarea = () => {
+                    const ta = document.querySelector('.chat-input textarea');
+                    if (ta) {
+                        ta.style.height = 'auto';
+                        ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
                     }
                 };
                 
@@ -1290,6 +1657,7 @@
                 // 组件挂载时获取模型列表
                 onMounted(() => {
                     fetchModels();
+                    initDarkMode();
                 });
                 
                 // 返回需要在模板中使用的变量和方法
@@ -1323,7 +1691,21 @@
                     cameraError,
                     cameraVideo,
                     behaviorResult,
-                    toggleCamera
+                    toggleCamera,
+                    // 意图模式
+                    intentMode,
+                    mockInterviewMode,
+                    currentRound,
+                    getIntentModeLabel,
+                    // 深色模式 & 滚动
+                    darkMode,
+                    toggleDarkMode,
+                    showScrollButton,
+                    onMessagesScroll,
+                    // Markdown
+                    renderMarkdown,
+                    formatTime,
+                    getMessageContent
                 };
             }
         }).mount('#app');

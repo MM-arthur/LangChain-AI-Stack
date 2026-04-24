@@ -10,7 +10,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_community.chat_models.moonshot import MoonshotChat
 from langchain_core.tools import Tool
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 from pathlib import Path
 import operator
 
@@ -394,11 +394,19 @@ def intent_recognition(state: Dict[str, Any]) -> Dict[str, Any]:
    - 需要实时数据：天气、股价、新闻、时间等
 4. **开放性问题**：闲聊、建议类、身份询问类 → 直接生成回复
    - 如："你是谁"、"介绍一下你自己"、"你好"
+5. **模拟面试**：用户想练习面试、希望 AI 扮演面试官提问 → 走 mock_interview
+   - 包含关键词："模拟面试"、"来面试"、"面试一下"、"帮我面试"、"扮演面试官"
+6. **面试复盘**：用户想复盘过去的面试表现、分析面试结果 → 走 interview_review
+   - 包含关键词："复盘"、"面试表现"、"我今天面了"、"我上次面了"、"面试怎么样"
+7. **职业规划**：询问职业发展方向、学习路径、是否该转方向 → 走 career_planning
+   - 包含关键词："怎么发展"、"职业方向"、"要不要转"、"该学什么"、"往哪走"
 
 重要判断优先级：
+- 如果问题包含"模拟面试"、"来面试"等关键词 → 优先判断为"模拟面试"
+- 如果问题包含"复盘"、"面试表现"、"我今天面了" → 优先判断为"面试复盘"
+- 如果问题包含职业发展方向相关词 → 优先判断为"职业规划"
 - 如果问题包含时间相关词（几点、今天、现在、当前），优先判断为"最新知识"
 - 如果问题是询问身份或自我介绍，判断为"开放性问题"
-- 只有明确的技术问题或简历相关问题才判断为"技术问题"或"个人问题"
 
 注意：
 1. 只输出JSON，不要添加任何其他文字
@@ -461,6 +469,15 @@ def agent_router(state: Dict[str, Any]) -> Dict[str, Any]:
         elif question_type == "最新知识":
             route_decision = "web_search"
             print(f"🎯 路由决策: 网页搜索（最新知识）")
+        elif question_type == "模拟面试":
+            route_decision = "mock_interview"
+            print(f"🎯 路由决策: 模拟面试")
+        elif question_type == "面试复盘":
+            route_decision = "interview_review"
+            print(f"🎯 路由决策: 面试复盘")
+        elif question_type == "职业规划":
+            route_decision = "career_planning"
+            print(f"🎯 路由决策: 职业规划")
         else:
             route_decision = "generate_response"
             print(f"🎯 路由决策: 直接生成回复（开放性问题）")
@@ -730,6 +747,19 @@ def check_rag_result(state: Dict[str, Any]) -> str:
         print(f"⚠️  RAG结果检查: 无相关内容，回退到网页搜索")
         return "no_content"
 
+def _get_intent_mode(state: Dict[str, Any]) -> str:
+    """从 state 推断当前意图模式，用于前端 UI 展示"""
+    if state.get("mock_interview_mode"):
+        return "mock_interview"
+    route = state.get("route_decision", "")
+    if route == "mock_interview":
+        return "mock_interview"
+    elif route == "interview_review":
+        return "interview_review"
+    elif route == "career_planning":
+        return "career_planning"
+    return "normal"
+
 def generate_response(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     🔵 LLM Node - 统一生成最终回复
@@ -827,14 +857,16 @@ def generate_response(state: Dict[str, Any]) -> Dict[str, Any]:
                 "history": state.get("history", []) + [
                     {"role": "user", "content": "分析面试官行为"},
                     {"role": "assistant", "content": final_response}
-                ]
+                ],
+                "intent_mode": _get_intent_mode(state)
             }
         except Exception as e:
             print(f"❌ generate_response 失败: {str(e)}")
             return {
                 **state,
                 "response": f"抱歉，生成回复时出现错误: {str(e)}",
-                "history": state.get("history", [])
+                "history": state.get("history", []),
+                "intent_mode": _get_intent_mode(state)
             }
 
     prompt = ChatPromptTemplate.from_messages([
@@ -884,7 +916,10 @@ def generate_response(state: Dict[str, Any]) -> Dict[str, Any]:
             "history": state.get("history", []) + [
                 {"role": "user", "content": optimized_text},
                 {"role": "assistant", "content": final_response}
-            ]
+            ],
+            "intent_mode": _get_intent_mode(state),
+            "mock_interview_mode": state.get("mock_interview_mode", False),
+            "current_round": state.get("current_round", 0)
         }
         
     except Exception as e:
@@ -898,8 +933,273 @@ def generate_response(state: Dict[str, Any]) -> Dict[str, Any]:
             "history": state.get("history", []) + [
                 {"role": "user", "content": optimized_text},
                 {"role": "assistant", "content": f"抱歉，生成回复时出现错误: {str(e)}"}
-            ]
+            ],
+            "intent_mode": _get_intent_mode(state)
         }
+
+# ============================================================
+# 职业意图节点（Personal AI Coach - 面试复盘/职业规划/模拟面试）
+# ============================================================
+
+def mock_interview(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    🤝 模拟面试节点
+    识别用户要求模拟面试，启动多轮面试对话流程
+    """
+    llm = init_llm()
+    
+    user_input = state.get("optimized_text", state.get("input_text", ""))
+    interview_history = state.get("interview_history", [])
+    mock_mode = state.get("mock_interview_mode", False)
+    current_round = state.get("current_round", 0)
+    
+    # 判断是启动面试还是继续面试
+    is_start = (
+        "模拟面试" in user_input or
+        "来面试" in user_input or
+        "面试一下" in user_input or
+        "帮我面试" in user_input
+    )
+    
+    if is_start:
+        # 启动新面试
+        interview_history = []
+        current_round = 0
+        mock_mode = True
+        
+        # 从 RAG 召回 Arthur 简历和 JD（如果有配置）
+        try:
+            import sys
+            sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+            from rag.RAG import load_personal_knowledge
+            personal_docs = load_personal_knowledge()
+            resume_context = ""
+            for doc in personal_docs:
+                if doc.metadata.get("type") == "personal_resume":
+                    resume_context += doc.page_content + "\n\n"
+        except Exception as e:
+            resume_context = ""
+            print(f"⚠️  简历加载失败: {e}")
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", """你是一个专业的中文面试官，正在为候选人进行模拟面试。
+
+你的职责：
+1. 根据候选人的背景（简历）选择合适的面试问题
+2. 先问2-3个热身问题（自我介绍、项目介绍）
+3. 然后深入问技术问题，每次问1个，追问细节
+4. 保持专业、友好的面试氛围
+
+输出要求：
+- 第一轮：直接输出第一道面试题，不要废话
+- 后续轮次：先对上一轮回答做1-2句简短点评，然后问下一道题
+- 问题要具体、循序渐进"""),
+            ("human", f"""候选人背景：
+{resume_context if resume_context else '暂无简历信息，按通用问题提问'}
+
+面试正式开始。请输出第一道面试题。""")
+        ])
+        
+        chain = prompt | llm | StrOutputParser()
+        response = chain.invoke({})
+        
+        interview_history.append({"role": "interviewer", "content": response})
+        current_round = 1
+        
+        return {
+            **state,
+            "response": response,
+            "mock_interview_mode": True,
+            "interview_history": interview_history,
+            "current_round": current_round
+        }
+    
+    elif mock_mode:
+        # 继续面试：用户回答了问题
+        interview_history.append({"role": "candidate", "content": user_input})
+        
+        # 检查是否结束面试
+        end_keywords = ["结束", "面试完了", "好了", "不用了", "结束面试"]
+        if any(kw in user_input for kw in end_keywords):
+            return {
+                **state,
+                "mock_interview_mode": False,
+                "interview_finished": True,
+                "interview_history": interview_history,
+                "route_decision": "generate_response"
+            }
+        
+        # 追问或生成下一题
+        history_str = "\n".join([f"{'面试官' if h['role']=='interviewer' else '候选人'}：{h['content']}" for h in interview_history[-6:]])
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", """你是专业面试官。
+- 先对候选人上一轮回答做1-2句简短点评（肯定优点或指出不足）
+- 然后继续追问或问下一道相关问题
+- 如果已经问了5轮以上，可以输出"面试结束，感谢参与！"
+- 问题要具体，结合他的简历背景"""),
+            ("human", f"""面试对话记录：
+{history_str}
+
+请继续面试（或结束面试）。""")
+        ])
+        
+        chain = prompt | llm | StrOutputParser()
+        response = chain.invoke({})
+        
+        interview_history.append({"role": "interviewer", "content": response})
+        current_round += 1
+        
+        return {
+            **state,
+            "response": response,
+            "mock_interview_mode": True,
+            "interview_history": interview_history,
+            "current_round": current_round
+        }
+    else:
+        # 非 mock_interview 模式，不处理
+        return {**state}
+
+
+def interview_review(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    📋 面试复盘节点
+    Arthur 输入面试内容，AI 对照 JD 和简历做结构化复盘
+    """
+    llm = init_llm()
+    
+    user_input = state.get("optimized_text", state.get("input_text", ""))
+    
+    # 从 RAG 召回 Arthur 简历和 JD
+    try:
+        import sys
+        sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+        from rag.RAG import load_personal_knowledge
+        personal_docs = load_personal_knowledge()
+        
+        resume_context = ""
+        jd_context = ""
+        for doc in personal_docs:
+            if doc.metadata.get("type") == "personal_resume":
+                resume_context += doc.page_content + "\n\n"
+            elif doc.metadata.get("type") == "personal_note":
+                jd_context += doc.page_content + "\n\n"
+    except Exception as e:
+        resume_context = ""
+        jd_context = ""
+        print(f"⚠️  知识库加载失败: {e}")
+    
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """你是一个专业的面试复盘助手，帮助候选人（Arthur）分析面试表现。
+
+分析维度：
+1. 【技术问题】- 问了什么技术？答得怎么样？有没有遗漏关键点？
+2. 【项目经验】- 面试官对哪个项目最感兴趣？有没有被问住的地方？
+3. 【表达与逻辑】- 回答是否有条理？STAR法则用了吗？
+4. 【整体评价】- 这次面试表现如何？几分？（10分制）
+5. 【下次改进】- 具体可操作的2-3条改进建议
+
+输出格式（Markdown）：
+## 📋 面试复盘报告
+
+### 整体评分：X/10
+### 1. 技术问题分析
+...
+### 2. 项目经验分析
+...
+### 3. 表达与逻辑
+...
+### 4. 下次改进建议
+...
+"""),
+        ("human", f"""请分析以下面试表现：
+
+候选人背景：
+{resume_context if resume_context else '暂无简历信息'}
+
+Arthur 描述的面试内容：
+{user_input}
+
+请生成结构化复盘报告。""")
+    ])
+    
+    chain = prompt | llm | StrOutputParser()
+    response = chain.invoke({})
+    
+    return {
+        **state,
+        "response": response,
+        "rag_sources": ["Arthur 个人简历", "面试复盘分析"],
+        "intent_mode": "interview_review"
+    }
+
+
+def career_planning(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    🧭 职业规划节点
+    结合 Arthur 简历 + 历史对话，给出个性化职业发展建议
+    """
+    llm = init_llm()
+    
+    user_input = state.get("optimized_text", state.get("input_text", ""))
+    
+    # 从 RAG 召回 Arthur 简历
+    try:
+        import sys
+        sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+        from rag.RAG import load_personal_knowledge
+        personal_docs = load_personal_knowledge()
+        resume_context = ""
+        for doc in personal_docs:
+            if doc.metadata.get("type") == "personal_resume":
+                resume_context += doc.page_content + "\n\n"
+    except Exception as e:
+        resume_context = ""
+        print(f"⚠️  简历加载失败: {e}")
+    
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """你是一个专业的职业规划顾问，为技术人才的职业发展提供个性化建议。
+
+分析维度：
+1. 【优势分析】- 结合 Arthur 的学历（天大硕士）、经历（Siemens/Lenovo/渤海银行）、技术栈（Java/Vue/AI Agent）
+2. 【市场定位】- 当前 AI 行业趋势 + 他的背景最适合什么岗位方向
+3. 【路径建议】- 短期（3-6个月）、中期（1-2年）、长期（3-5年）分别怎么走
+4. 【具体行动】- 每个阶段最值得做的一件事
+
+输出格式（Markdown）：
+## 🧭 Arthur 职业发展规划
+
+### 1. 个人优势分析
+...
+### 2. 目标岗位定位
+...
+### 3. 发展路径建议
+   - 短期（3-6个月）：...
+   - 中期（1-2年）：...
+   - 长期（3-5年）：...
+### 4. 当前最值得做的一件事
+...
+"""),
+        ("human", f"""Arthur 的背景：
+{resume_context if resume_context else '暂无简历信息'}
+
+他的职业发展问题/困惑：
+{user_input}
+
+请给出个性化职业规划建议。""")
+    ])
+    
+    chain = prompt | llm | StrOutputParser()
+    response = chain.invoke({})
+    
+    return {
+        **state,
+        "response": response,
+        "rag_sources": ["Arthur 个人简历", "职业规划分析"],
+        "intent_mode": "career_planning"
+    }
+
 
 def create_multi_agent():
     """
@@ -918,6 +1218,10 @@ def create_multi_agent():
     workflow.add_node("rag_processing", rag_processing)
     workflow.add_node("web_search", web_search)
     workflow.add_node("generate_response", generate_response)
+    # 职业意图节点（Personal AI Coach）
+    workflow.add_node("mock_interview", mock_interview)
+    workflow.add_node("interview_review", interview_review)
+    workflow.add_node("career_planning", career_planning)
 
     workflow.set_entry_point("pre_router")
 
@@ -958,6 +1262,12 @@ def create_multi_agent():
             return "rag_processing"
         elif route == "web_search":
             return "web_search"
+        elif route == "mock_interview":
+            return "mock_interview"
+        elif route == "interview_review":
+            return "interview_review"
+        elif route == "career_planning":
+            return "career_planning"
         else:
             return "generate_response"
     
@@ -967,6 +1277,9 @@ def create_multi_agent():
         {
             "rag_processing": "rag_processing",
             "web_search": "web_search",
+            "mock_interview": "mock_interview",
+            "interview_review": "interview_review",
+            "career_planning": "career_planning",
             "generate_response": "generate_response"
         }
     )
@@ -981,9 +1294,19 @@ def create_multi_agent():
     )
     
     workflow.add_edge("web_search", "generate_response")
+    workflow.add_edge("mock_interview", "generate_response")
+    workflow.add_edge("interview_review", "generate_response")
+    workflow.add_edge("career_planning", "generate_response")
     workflow.add_edge("generate_response", END)
     
-    agent = workflow.compile()
+    # SqliteSaver 持久化：所有 session 共用一个 checkpointer，靠 thread_id 隔离
+    import sqlite3
+    db_path = Path(project_root) / "data" / "checkpoints.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    sqlite_checkpointer = SqliteSaver(conn)
+    
+    agent = workflow.compile(checkpointer=sqlite_checkpointer)
     
     return agent
 

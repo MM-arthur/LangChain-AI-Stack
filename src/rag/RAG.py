@@ -1,4 +1,5 @@
-from langchain_community.document_loaders import WebBaseLoader, DirectoryLoader
+from langchain_community.document_loaders import WebBaseLoader, DirectoryLoader, PyPDFLoader
+from langchain_community.document_loaders import UnstructuredMarkdownLoader
 from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.prompts import ChatPromptTemplate
@@ -344,22 +345,199 @@ def generate_answer(state: RAGState):
 _vector_store_cache = None
 _cache_urls_key = None
 
+# FAISS 持久化路径
+FAISS_INDEX_DIR = Path(__file__).parent / "faiss_index"
+FAISS_INDEX_FILE = FAISS_INDEX_DIR / "index.faiss"
+FAISS_META_FILE = FAISS_INDEX_DIR / "meta.json"
+
+
+def _load_personal_docs_timestamp(knowledge_base_path: str) -> float:
+    """获取个人知识库最新文件的修改时间戳（用于判断是否需要重建索引）"""
+    import time
+    if not os.path.exists(knowledge_base_path):
+        return 0.0
+    latest_mtime = 0.0
+    for root, dirs, files in os.walk(knowledge_base_path):
+        for f in files:
+            if f.endswith(('.pdf', '.md')):
+                fp = os.path.join(root, f)
+                mtime = os.path.getmtime(fp)
+                if mtime > latest_mtime:
+                    latest_mtime = mtime
+    return latest_mtime
+
+
+def _save_vector_store_meta(cache_key: str, personal_mtime: float):
+    """保存 FAISS 索引元数据"""
+    import json
+    FAISS_INDEX_DIR.mkdir(parents=True, exist_ok=True)
+    meta = {
+        "cache_key": cache_key,
+        "personal_mtime": personal_mtime,
+        "saved_at": os.path.getmtime(str(FAISS_INDEX_FILE)) if FAISS_INDEX_FILE.exists() else None
+    }
+    with open(FAISS_META_FILE, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False)
+
+
+def _load_vector_store_meta() -> dict:
+    """加载 FAISS 索引元数据"""
+    import json
+    if not FAISS_META_FILE.exists():
+        return {}
+    with open(FAISS_META_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def load_personal_knowledge(knowledge_base_path: str = None) -> List[Document]:
+    """
+    加载 Arthur 个人知识库：简历、JD、行业知识等
+    敏感文件，留在本地，不上传 GitHub
+    """
+    if knowledge_base_path is None:
+        knowledge_base_path = os.getenv("RAG_KNOWLEDGE_BASE", "")
+    
+    if not knowledge_base_path or not os.path.exists(knowledge_base_path):
+        logger.info("未配置个人知识库路径或路径不存在，跳过")
+        return []
+    
+    docs = []
+    
+    # 加载 PDF 文件（简历、工作证明等）
+    pdf_files = [f for f in os.listdir(knowledge_base_path) if f.endswith(".pdf")]
+    for pdf_file in pdf_files:
+        pdf_path = os.path.join(knowledge_base_path, pdf_file)
+        try:
+            logger.info(f"📄 加载 PDF: {pdf_file}")
+            loader = PyPDFLoader(pdf_path)
+            pdf_docs = loader.load()
+            for doc in pdf_docs:
+                doc.metadata["source"] = f"个人资料/{pdf_file}"
+                doc.metadata["type"] = "personal_resume"
+            docs.extend(pdf_docs)
+            logger.info(f"  ✅ 加载 {len(pdf_docs)} 页")
+        except Exception as e:
+            logger.warning(f"  ⚠️  PDF 加载失败 {pdf_file}: {e}")
+    
+    # 加载 Markdown 文件（SOP、笔记等）
+    md_files = [f for f in os.listdir(knowledge_base_path) if f.endswith(".md")]
+    for md_file in md_files:
+        md_path = os.path.join(knowledge_base_path, md_file)
+        try:
+            logger.info(f"📝 加载 Markdown: {md_file}")
+            loader = UnstructuredMarkdownLoader(md_path)
+            md_docs = loader.load()
+            for doc in md_docs:
+                doc.metadata["source"] = f"个人资料/{md_file}"
+                doc.metadata["type"] = "personal_note"
+            docs.extend(md_docs)
+            logger.info(f"  ✅ 加载 {len(md_docs)} 段")
+        except Exception as e:
+            logger.warning(f"  ⚠️  Markdown 加载失败 {md_file}: {e}")
+    
+    logger.info(f"个人知识库加载完成，共 {len(docs)} 个文档")
+    return docs
+
+def add_documents_to_vector_store(existing_vs: FAISS, new_docs: List[Document]) -> FAISS:
+    """
+    将新文档追加到已有的 FAISS 向量存储（不重建索引）
+    """
+    if not new_docs:
+        return existing_vs
+    
+    texts = [doc.page_content for doc in new_docs]
+    metadatas = [doc.metadata for doc in new_docs]
+    
+    embeddings = get_embeddings()
+    texts_with_embeddings = list(zip(texts, embeddings.embed_documents(texts)))
+    
+    existing_vs.add_embeddings(texts_with_embeddings, metadatas=metadatas)
+    logger.info(f"已追加 {len(new_docs)} 个文档到向量存储")
+    return existing_vs
+
 def get_or_create_vector_store(urls: List[str] = None, file_path: str = None) -> FAISS:
     """
-    获取或创建向量存储（带缓存）
+    获取或创建向量存储（带缓存 + FAISS 持久化）
+    
+    知识库构成：
+    1. CSDN 博客（通用技术知识）
+    2. Arthur 个人知识库（简历 + JD + 行业知识，本地私有）
+    
+    持久化策略：
+    - 启动时检查 faiss_index/ 是否存在且 cache_key 匹配
+    - 如果个人文档有更新（mtime 变化），强制重建
+    - 重建后自动保存到 faiss_index/
     """
     global _vector_store_cache, _cache_urls_key
     
     cache_key = str(sorted(urls)) if urls else file_path
+    personal_base = os.getenv("RAG_KNOWLEDGE_BASE", "")
+    personal_mtime = _load_personal_docs_timestamp(personal_base) if personal_base else 0.0
     
+    # Step 1: 尝试从持久化索引加载
+    if FAISS_INDEX_FILE.exists():
+        meta = _load_vector_store_meta()
+        if (
+            meta.get("cache_key") == cache_key
+            and meta.get("personal_mtime", 0) >= personal_mtime
+        ):
+            try:
+                logger.info("📦 从 FAISS 持久化索引加载...（启动加速）")
+                embeddings = get_embeddings()
+                _vector_store_cache = FAISS.load_local(
+                    str(FAISS_INDEX_DIR),
+                    embeddings,
+                    allow_dangerous_deserialization=True
+                )
+                _cache_urls_key = cache_key
+                logger.info("✅ FAISS 持久化索引加载成功")
+                return _vector_store_cache
+            except Exception as e:
+                logger.warning(f"⚠️  FAISS 索引加载失败，将重建: {e}")
+    
+    # Step 2: 内存缓存命中
     if _vector_store_cache is not None and _cache_urls_key == cache_key:
-        print("📦 使用缓存的向量存储")
+        print("📦 使用内存缓存的向量存储")
         return _vector_store_cache
     
-    print("🔄 创建新的向量存储...")
-    chunked_docs = load_and_chunk_documents(urls=urls, file_path=file_path)
-    _vector_store_cache = create_vector_store(chunked_docs)
+    # Step 3: 需要重建索引
+    print("🔄 重建向量存储...")
+    
+    # 3a. 加载 CSDN 博客
+    if urls or file_path:
+        chunked_docs = load_and_chunk_documents(urls=urls, file_path=file_path)
+        _vector_store_cache = create_vector_store(chunked_docs)
+        logger.info("✅ CSDN 博客索引创建完成")
+    else:
+        _vector_store_cache = None
+    
+    # 3b. 追加 Arthur 个人知识库
+    personal_docs = load_personal_knowledge()
+    if personal_docs:
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=800,
+            chunk_overlap=150,
+            add_start_index=True
+        )
+        personal_chunks = text_splitter.split_documents(personal_docs)
+        logger.info(f"个人文档分块完成，共 {len(personal_chunks)} 个块")
+        
+        if _vector_store_cache is None:
+            _vector_store_cache = create_vector_store(personal_chunks)
+        else:
+            _vector_store_cache = add_documents_to_vector_store(_vector_store_cache, personal_chunks)
+        logger.info("✅ 个人知识库追加完成")
+    
     _cache_urls_key = cache_key
+    
+    # Step 4: 持久化到磁盘
+    try:
+        FAISS_INDEX_DIR.mkdir(parents=True, exist_ok=True)
+        _vector_store_cache.save_local(str(FAISS_INDEX_DIR))
+        _save_vector_store_meta(cache_key, personal_mtime)
+        logger.info(f"✅ FAISS 索引已保存到 {FAISS_INDEX_DIR}")
+    except Exception as e:
+        logger.warning(f"⚠️  FAISS 索引保存失败: {e}")
     
     return _vector_store_cache
 

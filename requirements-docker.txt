@@ -1,0 +1,74 @@
+# ============================================================
+# requirements-docker.txt
+# Docker 镜像专用依赖，替换 requirements.txt 使用
+# 调整点：
+#   - opencv-python → opencv-python-headless（无 GUI，更小）
+#   - paddlepaddle → paddlepaddle-gpu（GPU 支持，或保持 CPU）
+#   - 添加镜像站认证包
+# ============================================================
+
+# ── Core Framework ─────────────────────────────────────────
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+pydantic==2.5.0
+python-dotenv==1.0.0
+
+# ── LangChain & LangGraph ───────────────────────────────────
+langchain==0.1.0
+langchain-community==0.0.13
+langchain-core==0.1.10
+langchain-openai==0.0.2
+langchain-anthropic==0.0.1
+langchain-huggingface==0.0.1
+langgraph==0.0.20
+langchain-mcp-adapters==0.1.0
+
+# ── LLM APIs ────────────────────────────────────────────────
+openai==1.6.1
+anthropic==0.8.1
+
+# ── MCP Server ──────────────────────────────────────────────
+mcp==0.1.0
+
+# ── OCR & Document Processing ───────────────────────────────
+# CPU 版本：国内镜像有预编译 wheel
+paddleocr==2.7.0.3
+paddlepaddle==2.5.2
+opencv-python-headless==4.8.1.78
+pymupdf==1.23.8
+python-docx==1.1.0
+openpyxl==3.1.2
+pandas==2.1.4
+
+# ── Speech Recognition ──────────────────────────────────────
+# Funasr：从 ModelScope 下载，运行时拉取，不到镜像里
+funasr>=1.0.0
+modelscope>=1.20.0
+
+# ── Computer Vision & Behavior Analysis ─────────────────────
+# YOLO：运行时从 HuggingFace / Ultralytics CDN 下载，不到镜像里
+ultralytics>=8.0.0
+
+# ── RAG & Embeddings ────────────────────────────────────────
+faiss-cpu==1.7.4
+sentence-transformers==2.2.2
+tiktoken==0.5.2
+tavily-python==0.3.0
+
+# ── Web Scraping ────────────────────────────────────────────
+beautifulsoup4==4.12.2
+requests==2.31.0
+aiohttp==3.9.1
+
+# ── Utilities ───────────────────────────────────────────────
+numpy>=1.24.0
+pytz==2023.3
+json5==2.0.1
+
+# ── Logging & Monitoring ─────────────────────────────────────
+loguru==0.7.2
+
+# ── Testing (optional) ──────────────────────────────────────
+pytest==7.4.3
+pytest-asyncio==0.21.1

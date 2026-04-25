@@ -163,53 +163,76 @@ graph TD
     INPUT_TYPE -->|Excel/Word| FILE_DOC
 
     TEXT_INPUT --> OPTIMIZE
-    VOICE_INPUT --> WHISPER[Whisper 语音识别]
+    VOICE_INPUT --> WHISPER[Funasr 语音识别]
     WHISPER --> TRANSCRIPT[transcript]
     TRANSCRIPT --> OPTIMIZE
 
-    FILE_IMG --> OCR[OCR处理]
+    FILE_IMG --> OCR[PaddleOCR 文字识别]
     OCR --> TRANSCRIPT
 
     FILE_DOC --> DOC_PARSE[文档解析]
     DOC_PARSE --> TRANSCRIPT
 
-    VIDEO_INPUT --> YOLO[YOLO 行为分析]
+    VIDEO_INPUT --> YOLO[YOLOv8n 行为分析]
     YOLO --> BEHAVIOR_RESULT
 
     OPTIMIZE[optimize_transcript] --> INTENT[intent_recognition]
     INTENT --> ROUTER[agent_router]
 
-    ROUTER -->|技术问题| RAG[RAG检索]
+    ROUTER -->|技术问题/个人问题| RAG[RAG检索]
+    RAG --> CHECK1{RAG有结果?}
+    CHECK1 -->|有| GENERATE_RAG[generate_response]
+    CHECK1 -->|无| SEARCH
+
     ROUTER -->|最新知识| SEARCH[网页搜索]
-    ROUTER -->|开放性问题| GENERATE1[generate_response]
+    SEARCH --> GENERATE_WEB[generate_response]
 
-    RAG --> CHECK{RAG有结果?}
-    CHECK -->|有| GENERATE2[generate_response]
-    CHECK -->|无| SEARCH
+    ROUTER -->|开放性问题| GENERATE_OPEN[generate_response]
 
-    SEARCH --> GENERATE3[generate_response]
+    ROUTER -->|模拟面试| MOCK[MOCK_INTERVIEW
+    │多轮对话]
+    MOCK --> MOCK_LOOP{继续?}
+    MOCK_LOOP -->|继续| MOCK
+    MOCK_LOOP -->|结束| MOCK_REPORT[生成评估报告]
 
-    BEHAVIOR_RESULT --> BEHAVIOR_RESP[generate_response<br/>面试官分析]
+    ROUTER -->|面试复盘| REVIEW[INTERVIEW_REVIEW]
+    REVIEW --> REVIEW_RPT[生成复盘报告]
 
-    GENERATE1 --> END1([输出])
-    GENERATE2 --> END2([输出])
-    GENERATE3 --> END3([输出])
+    ROUTER -->|职业规划| CAREER[CAREER_PLANNING]
+    CAREER --> CAREER_PLAN[生成发展规划]
+
+    BEHAVIOR_RESULT --> BEHAVIOR_RESP[generate_response
+    面试官分析]
+
+    GENERATE_RAG --> END1([输出])
+    GENERATE_WEB --> END2([输出])
+    GENERATE_OPEN --> END3([输出])
     BEHAVIOR_RESP --> END4([输出])
+    MOCK_REPORT --> END5([输出])
+    REVIEW_RPT --> END6([输出])
+    CAREER_PLAN --> END7([输出])
 
-    style WHISPER fill:#17a2b8,color:#fff
-    style YOLO fill:#17a2b8,color:#fff
-    style OCR fill:#17a2b8,color:#fff
-    style DOC_PARSE fill:#51cf66,color:#fff
     style OPTIMIZE fill:#4a90d9,color:#fff
     style INTENT fill:#4a90d9,color:#fff
     style ROUTER fill:#4a90d9,color:#fff
     style RAG fill:#4a90d9,color:#fff
     style SEARCH fill:#4a90d9,color:#fff
-    style GENERATE1 fill:#4a90d9,color:#fff
-    style GENERATE2 fill:#4a90d9,color:#fff
-    style GENERATE3 fill:#4a90d9,color:#fff
+    style MOCK fill:#8b5cf6,color:#fff
+    style REVIEW fill:#8b5cf6,color:#fff
+    style CAREER fill:#8b5cf6,color:#fff
+    style GENERATE_RAG fill:#4a90d9,color:#fff
+    style GENERATE_WEB fill:#4a90d9,color:#fff
+    style GENERATE_OPEN fill:#4a90d9,color:#fff
     style BEHAVIOR_RESP fill:#4a90d9,color:#fff
-    style CHECK fill:#ff9800,color:#fff
+    style MOCK_REPORT fill:#8b5cf6,color:#fff
+    style REVIEW_RPT fill:#8b5cf6,color:#fff
+    style CAREER_PLAN fill:#8b5cf6,color:#fff
+    style WHISPER fill:#17a2b8,color:#fff
+    style YOLO fill:#17a2b8,color:#fff
+    style OCR fill:#17a2b8,color:#fff
+    style DOC_PARSE fill:#51cf66,color:#fff
+    style CHECK1 fill:#ff9800,color:#fff
+    style MOCK_LOOP fill:#ff9800,color:#fff
 ```
 
 ---
@@ -220,7 +243,8 @@ graph TD
 |------|----------------|----------------|
 | Agent 实例 | 每次请求 `create_multi_agent()` 重新编译 | 进程启动时一次性编译全局单例 |
 | 会话状态 | 两个全局 `dict`（sessions + conversation_history）分散管理 | `SessionManager` 统一管理生命周期 |
-| Checkpointer | 只有 `/api/initialize` 路径用了 MemorySaver | 每个 session 自动分配独立 checkpointer |
+| Checkpointer | 只有 `/api/initialize` 路径用了 MemorySaver | 每个 session 自动分配独立 SqliteSaver |
+| 会话持久化 | 无持久化，重启丢失 | SqliteSaver 持久化，重启不丢 |
 | MCP 工具 | 每个 session 都重新加载 | 单例加载一次，按需传递给各 session |
 | WebSocket vs REST | 两套 agent 实例，互不感知 | 共用 `AgentSingleton`，差异化靠 session config |
 
@@ -254,11 +278,12 @@ graph TD
 | `mock_interview` | 🔵 LLM | intent + interview_history | interview_response + mock_interview_mode | 模拟面试多轮对话 |
 | `interview_review` | 🔵 LLM | optimized_text | review_report | 面试复盘分析 |
 | `career_planning` | 🔵 LLM | optimized_text | career_plan | 职业发展规划 |
-| `agent_router` | 🔵 LLM | intent | route_decision | 根据意图决定路由 |
 | `rag_processing` | 🔵 LLM | optimized_text | rag_result, rag_sources | RAG 检索本地知识库 |
 | `check_rag_result` | 🟠 Condition | rag_result | has_content / no_content | 检查 RAG 是否有结果 |
 | `web_search` | 🔵 LLM | optimized_text | web_search_result, web_sources | ReAct Agent 网页搜索 |
 | `generate_response` | 🔵 LLM | context (RAG/网页/行为分析) | response | 生成最终回复 |
+
+**紫色 🔵 LLM 节点**为新增的职业意图节点。
 
 ---
 
@@ -273,6 +298,7 @@ classDiagram
         +str transcript
         +str optimized_text
         +Dict intent
+        +str intent_mode           -- 职业意图模式
         +str route_decision
         +str pre_route
         +Dict ocr_result
@@ -284,6 +310,10 @@ classDiagram
         +Dict behavior_result
         +str response
         +List history
+        +str mock_interview_mode   -- 模拟面试轮次
+        +List interview_history    -- 面试对话历史
+        +str review_report          -- 面试复盘报告
+        +str career_plan            -- 职业发展规划
     }
 ```
 

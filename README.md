@@ -418,6 +418,8 @@ flowchart LR
 | `/api/ocr` | POST | 仅 OCR 处理 |
 | `/api/parse_document` | POST | 仅文档解析 |
 | `/api/config` | GET | 获取 MCP 配置 |
+| `/api/mcp/tools` | GET | 列出所有可用的 MCP 工具 |
+| `/api/mcp/load` | POST | 按需加载指定的 MCP 工具 |
 | `/api/sessions` | GET | 获取所有活跃会话 |
 | `/api/session/{session_id}` | GET | 获取指定会话状态 |
 | `/api/reset_conversation` | POST | 重置会话历史 |
@@ -457,6 +459,75 @@ ws.onmessage = (event) => {
   }
 };
 ```
+
+---
+
+## MCP 工具系统
+
+项目使用 **Model Context Protocol (MCP)** 实现工具的标准化接入。
+
+### 架构
+
+```
+LangGraph Agent
+     ↓
+MCPToolLoader ← mcp_config.json
+     ↓
+MultiServerMCPClient (langchain-mcp-adapters)
+     ↓
+stdio 子进程 ← MCP Server
+     ↓
+实际工具（Tavily / Time / etc）
+```
+
+### 当前已接入的工具
+
+| 工具名 | 类型 | 说明 |
+|--------|------|------|
+| `get_current_time` | MCP Server | 获取当前时间（支持时区） |
+| `web_search` | MCP Server | 网页搜索（旧版，直接调 SDK） |
+| `tavily_search` | MCP Server | Tavily 网页搜索（新 MCP 协议） |
+| `tavily_sources` | MCP Server | 获取搜索来源链接 |
+
+### MCP Server 开发
+
+新增 MCP 工具只需两步：
+
+1. **编写 MCP Server**（stdio 通信）：
+   ```python
+   from mcp.server.fastmcp import FastMCP
+   mcp = FastMCP("MyTool")
+
+   @mcp.tool()
+   def my_tool(arg1: str) -> str:
+       return f"结果: {arg1}"
+
+   if __name__ == "__main__":
+       mcp.run(transport="stdio")
+   ```
+
+2. **注册到 mcp_config.json**：
+   ```json
+   {
+     "my_tool": {
+       "command": "python",
+       "args": ["src/mcp_server/mcp_server_my_tool.py"],
+       "transport": "stdio"
+     }
+   }
+   ```
+
+3. **在代码中加载**（按需）：
+   ```python
+   from src.mcp_client import get_mcp_tool_loader
+
+   loader = get_mcp_tool_loader()
+   tools = loader.load_tools(["my_tool"])
+   ```
+
+### 多工具并发加载
+
+`MCPToolLoader.load_tools(["tool1", "tool2"])` 支持一次性加载多个工具，共享同一个 client 实例。
 
 ---
 

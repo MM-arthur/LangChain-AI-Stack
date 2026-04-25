@@ -12,5 +12,19 @@
       "src/mcp_server/mcp_server_web_search.py"
     ],
     "transport": "stdio"
+  },
+  "tavily_search": {
+    "command": "python",
+    "args": [
+      "src/mcp_server/mcp_server_tavily_search.py"
+    ],
+    "transport": "stdio"
+  },
+  "tavily_sources": {
+    "command": "python",
+    "args": [
+      "src/mcp_server/mcp_server_tavily_search.py"
+    ],
+    "transport": "stdio"
   }
 }

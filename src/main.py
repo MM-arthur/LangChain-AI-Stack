@@ -306,6 +306,43 @@ async def get_config():
     return load_config_from_json()
 
 
+@app.get("/api/mcp/tools")
+async def get_mcp_tools():
+    """列出所有已加载的 MCP 工具（通过 langchain-mcp-adapters）"""
+    try:
+        from src.mcp_client import get_mcp_tool_loader, load_mcp_config
+        loader = get_mcp_tool_loader()
+        all_tools = loader.get_all_available_tools()
+        return {
+            "available_tools": all_tools,
+            "description": "通过 MultiServerMCPClient 动态加载的 MCP 工具列表",
+            "usage": "POST /api/mcp/load with [tools] to load specific tools"
+        }
+    except Exception as e:
+        return {"error": str(e), "available_tools": []}
+
+
+@app.post("/api/mcp/load")
+async def load_mcp_tools_endpoint(body: dict = None):
+    """按需加载指定的 MCP 工具"""
+    if body is None:
+        body = {}
+    tool_names = body.get("tools", [])
+    if not tool_names:
+        return {"error": "请指定要加载的工具名列表", "loaded": []}
+
+    try:
+        from src.mcp_client import get_mcp_tool_loader
+        loader = get_mcp_tool_loader()
+        tools = loader.load_tools(tool_names)
+        return {
+            "loaded": [t.name for t in tools],
+            "count": len(tools)
+        }
+    except Exception as e:
+        return {"error": str(e), "loaded": []}
+
+
 @app.post("/api/process_audio")
 async def process_audio(
     audio: UploadFile = File(...),

@@ -1,6 +1,7 @@
 # Generation node: generate_response (handles behavior analysis + normal RAG/web responses)
 
 from typing import Dict, Any
+import json
 from langchain_core.prompts import ChatPromptTemplate
 from src.core.llm import init_llm
 from src.core.retry import with_retry
@@ -271,74 +272,88 @@ def rag_processing(state: Dict[str, Any]) -> Dict[str, Any]:
 def web_search(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     🔵 LLM Node - ReAct Agent 网页搜索
+    通过 MCP stdio 调用 tavily_search 工具，而非直接调用 SDK
     """
     llm = init_llm()
     optimized_text = state.get("optimized_text", state.get("input_text", ""))
 
-    # Tavily search tool
-    def tavily_search(query: str) -> str:
-        try:
-            from langchain_community.tools.tavily_search import TavilySearchResults
-            from langchain_community.chat_models.moonshot import MoonshotChat
-
-            api_key = os.getenv("TAVILY_API_KEY")
-            if not api_key:
-                return json.dumps({"error": "TAVILY_API_KEY未配置"}, ensure_ascii=False)
-
-            client = TavilyClient(api_key=api_key)
-            results = client.search(query=query, max_results=5)
-            return json.dumps(results, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({"error": str(e)}, ensure_ascii=False)
-
-    def get_search_sources(query: str) -> str:
-        try:
-            TavilySearchResults
-            from langchain_community.tools.tavily_search import TavilySearchResults
-            import os
-
-            api_key = os.getenv("TAVILY_API_KEY")
-            if not api_key:
-                return "TAVILY_API_KEY未配置"
-
-            tool = TavilySearchResults(api_key=api_key)
-            results = tool.run(query)
-            return results[:500] if results else "未找到相关来源"
-        except Exception as e:
-            return f"搜索来源获取失败: {str(e)}"
-
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", """你是一个网页搜索助手。使用搜索工具获取最新信息。
-
-**要求**：
-1. 先思考需要搜索什么关键词
-2. 使用 search 工具获取信息
-3. 基于搜索结果回答问题
-
-**工具**：
-- search(query): 搜索网页，返回摘要
-- get_sources(query): 获取信息来源
-
-**输出格式**：
-【搜索结果】
-...（搜索到的内容摘要）
-
-【信息来源】
-...（来源列表）"""),
-        ("human", "{question}")
-    ])
-
-    chain = prompt | llm
-
+    # 加载 MCP Tavily 工具
     try:
-        response = chain.invoke({"question": optimized_text})
+        from src.mcp_client import get_mcp_tool_loader
+        loader = get_mcp_tool_loader()
+        tools = loader.load_tools(["tavily_search", "tavily_sources"])
+
+        if not tools:
+            return {
+                **state,
+                "web_search_result": "MCP 工具加载失败，请检查 langchain-mcp-adapters 是否安装",
+                "web_sources": []
+            }
+
+        tavily_search_tool = next((t for t in tools if t.name == "tavily_search"), None)
+        tavily_sources_tool = next((t for t in tools if t.name == "tavily_sources"), None)
+
+        if not tavily_search_tool:
+            return {
+                **state,
+                "web_search_result": "未找到 tavily_search 工具",
+                "web_sources": []
+            }
+
+        # 通过 MCP 工具调用搜索
+        search_result = tavily_search_tool.invoke({"query": optimized_text, "max_results": 5})
+
+        # 获取来源
+        sources = ""
+        if tavily_sources_tool:
+            try:
+                sources = tavily_sources_tool.invoke({"query": optimized_text})
+            except Exception:
+                sources = ""
+
+        # 解析搜索结果
+        import json
+        try:
+            results_data = json.loads(search_result) if isinstance(search_result, str) else search_result
+            if isinstance(results_data, list):
+                formatted = []
+                for r in results_data:
+                    formatted.append(f"【{r.get('title', '未知')}】{r.get('content', '')[:200]}...\n来源: {r.get('url', '')}")
+                web_search_result = "\n\n".join(formatted)
+                web_sources = [r.get('url', '') for r in results_data[:3]]
+            else:
+                web_search_result = str(results_data)
+                web_sources = []
+        except (json.JSONDecodeError, TypeError):
+            web_search_result = str(search_result)
+            web_sources = []
+
+        print(f"✅ MCP web_search 完成，命中 {len(web_sources)} 条来源")
+
         return {
             **state,
-            "web_search_result": response.content,
-            "web_sources": []
+            "web_search_result": web_search_result,
+            "web_sources": web_sources or []
         }
+
     except Exception as e:
-        print(f"❌ web_search 失败: {str(e)}")
+        print(f"❌ web_search MCP 调用失败: {str(e)}")
+        # 降级：尝试直接用 SDK
+        try:
+            from tavily import TavilyClient
+            api_key = os.getenv("TAVILY_API_KEY")
+            if api_key:
+                client = TavilyClient(api_key=api_key)
+                results = client.search(query=optimized_text, max_results=5)
+                formatted = [f"【{r.get('title', '')}】{r.get('content', '')[:200]}...\n来源: {r.get('url', '')}" for r in results.get("results", [])]
+                return {
+                    **state,
+                    "web_search_result": "\n\n".join(formatted),
+                    "web_sources": [r.get("url", "") for r in results.get("results", [])[:3]]
+                }
+        except Exception:
+            pass
+
         return {
             **state,
             "web_search_result": f"搜索失败: {str(e)}",

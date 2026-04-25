@@ -9,7 +9,7 @@
 
 ---
 
-## 核心架构：单例 Agent + 分层会话管理
+## 核心架构：单例 Agent + 分层会话管理 + SqliteSaver 持久化
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -25,23 +25,52 @@
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    SessionManager                           │
-│              （每个 session 一个 checkpointer）                │
+│              （每个 session 一个 SqliteSaver checkpointer）  │
 │                                                             │
-│   session_a ──→ MemorySaver (a) ──→ 独立状态                │
-│   session_b ──→ MemorySaver (b) ──→ 独立状态                │
-│   session_c ──→ MemorySaver (c) ──→ 独立状态                │
+│   session_a ──→ SqliteSaver (a) ──→ 独立状态 + 持久化      │
+│   session_b ──→ SqliteSaver (b) ──→ 独立状态 + 持久化      │
+│   session_c ──→ SqliteSaver (c) ──→ 独立状态 + 持久化      │
 │                                                             │
 │   + MCP client per session（工具集）                         │
-│   + conversation_history per session                        │
+│   + 个人知识库（RAG）per session                             │
+│   + 对话历史 per session                                     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 **设计原则（Hermes 思想）：**
 
 - **一个 Agent 单例，服务所有会话** — 进程级单例，节省编译开销
-- **会话隔离靠 Checkpointer** — 每个 session_id 对应独立 MemorySaver 快照
+- **SqliteSaver 持久化** — 服务重启不丢对话历史
+- **个人知识库 RAG** — Arthur 简历 + JD + CSDN 博客追加到 FAISS
+- **职业意图路由** — mock_interview / interview_review / career_planning
+- **会话隔离靠 Checkpointer** — 每个 session_id 对应独立 SqliteSaver 快照
 - **工具集按会话加载** — MCP client 独立管理，不跨会话污染
 - **渐进式记忆** — 短期会话历史 + 长期 RAG 知识库，分层设计
+
+---
+
+## 职业意图路由
+
+三大职业意图节点，自动识别用户需求：
+
+| 意图节点 | 触发关键词 | 功能 |
+|---------|-----------|------|
+| `mock_interview` | 模拟面试、来面试 | 多轮模拟面试，结束时输出结构化评估报告 |
+| `interview_review` | 复盘、面试表现 | 对照 JD/简历，输出技术评分 + 改进建议 |
+| `career_planning` | 职业方向、怎么发展 | 召回简历 + 历史对话，输出个性化发展路径 |
+
+**意图路由逻辑：**
+
+```
+用户输入 → intent_recognition → _get_intent_mode()
+                                              ↓
+                           ┌──────────────────────────┐
+                           │ mock_interview           │  模拟面试多轮对话
+                           │ interview_review          │  面试复盘分析
+                           │ career_planning          │  职业发展规划
+                           │ (default: normal_chat)   │  普通对话
+                           └──────────────────────────┘
+```
 
 ---
 
@@ -88,6 +117,21 @@ cd src/ui && python -m http.server 8080
 - API 文档: <http://localhost:8000/docs>
 - 前端界面: <http://localhost:8080>
 
+### Docker 部署
+
+```bash
+# 构建镜像
+DOCKER_BUILDKIT=1 docker build --tag langchain-ai-stack:latest .
+
+# 运行容器
+docker run -d -p 8000:8000 -p 8080:8080 \
+  -e MOONSHOT_API_KEY=your_api_key \
+  -v $(pwd)/data:/app/data \
+  langchain-ai-stack:latest
+```
+
+详细部署文档见 [DEPLOY.md](./DEPLOY.md)。
+
 ---
 
 ## 与 Hermes Agent 的设计对照
@@ -95,9 +139,11 @@ cd src/ui && python -m http.server 8080
 | 维度 | Hermes Agent | LangChain-AI-Stack（本项目） |
 |------|-------------|--------------------------|
 | 单例模式 | AIAgent 单例，服务所有入口 | `AgentSingleton` 编译一次，服务所有 session |
-| 会话隔离 | SQLite + FTS5 per session | `MemorySaver` per session_id（LangGraph thread） |
+| 会话持久化 | SQLite + FTS5 per session | `SqliteSaver` per session_id（LangGraph thread） |
 | 工具管理 | 47 注册工具，19 工具集 | `MultiServerMCPClient` per session |
 | 记忆分层 | MEMORY.md + USER.md + 会话历史 | `conversation_history`（会话）+ RAG（长期知识） |
+| 个人知识库 | — | Arthur 简历 + JD + CSDN 博客 → FAISS |
+| 职业意图 | — | mock_interview / interview_review / career_planning |
 | 平台入口 | CLI / Gateway / ACP / Batch / API | WebSocket / REST API |
 
 ---
@@ -203,7 +249,11 @@ graph TD
 | `behavior_detection` | 🩵 Local | video_frame_data | behavior_result | YOLO 分析面试官行为 |
 | `process_speech_to_text` | 🟢 Tool | input_text, transcript | transcript | 统一处理文本输入 |
 | `optimize_transcript` | 🔵 LLM | transcript | optimized_text | LLM 润色/规范化文本 |
-| `intent_recognition` | 🔵 LLM | optimized_text | intent (question_type, execution_plan) | 识别问题类型 |
+| `intent_recognition` | 🔵 LLM | optimized_text | intent + intent_mode | 识别问题类型 + 职业意图模式 |
+| `agent_router` | 🔵 LLM | intent | route_decision | 根据意图决定路由 |
+| `mock_interview` | 🔵 LLM | intent + interview_history | interview_response + mock_interview_mode | 模拟面试多轮对话 |
+| `interview_review` | 🔵 LLM | optimized_text | review_report | 面试复盘分析 |
+| `career_planning` | 🔵 LLM | optimized_text | career_plan | 职业发展规划 |
 | `agent_router` | 🔵 LLM | intent | route_decision | 根据意图决定路由 |
 | `rag_processing` | 🔵 LLM | optimized_text | rag_result, rag_sources | RAG 检索本地知识库 |
 | `check_rag_result` | 🟠 Condition | rag_result | has_content / no_content | 检查 RAG 是否有结果 |
@@ -258,6 +308,9 @@ classDiagram
 | 个人问题 | `rag_processing` | 从个人简历/项目经验检索 |
 | 最新知识 | `web_search` | 需要实时信息 |
 | 开放性问题 | `generate_response` | 直接生成回复 |
+| mock_interview | `mock_interview` | 进入模拟面试流程 |
+| interview_review | `interview_review` | 进入面试复盘流程 |
+| career_planning | `career_planning` | 进入职业规划流程 |
 
 ---
 
@@ -387,6 +440,14 @@ ws.onmessage = (event) => {
 | **视觉分析** | 开启/关闭摄像头，实时分析面试官行为 |
 | 重置 | 重置会话 |
 
+**UI 特性：**
+
+- 深色模式（localStorage 记忆用户偏好）
+- 打字动画 + 智能滚动
+- Markdown 渲染（代码块 / 加粗 / 斜体 / 列表）
+- 意图模式指示条 + 面试轮次计数器
+- 消息时间戳
+
 ---
 
 ## 技术栈
@@ -421,7 +482,8 @@ LangChain-AI-Stack/
 │   ├── document_parser/
 │   │   └── document_parser_service.py  # Excel/Word 文档解析
 │   ├── rag/
-│   │   └── RAG.py                  # 向量检索增强
+│   │   └── RAG.py                  # 向量检索增强（FAISS 持久化 + 个人知识库）
+│   │   └── faiss_index/            # FAISS 索引（.gitignore，不上传）
 │   ├── custom_api_llm/
 │   │   └── model.py                 # 自定义 API LLM 模型
 │   ├── mcp_server/                  # MCP 工具服务器
@@ -429,6 +491,7 @@ LangChain-AI-Stack/
 │   │   └── mcp_server_web_search.py # 搜索工具
 │   └── ui/
 │       └── index.html               # 前端界面
+├── data/                            # SqliteSaver 持久化数据（.gitignore）
 ├── tests/
 │   └── demo/
 │       └── easychat.py              # 简单对话示例
@@ -516,9 +579,9 @@ POST /api/reset_conversation
 
 ## 🏆 里程碑
 
-### 2026-04-21 — Nova 加入协作
+### Nova 加入协作
 
-> 这一天，Nova（OpenClaw AI）正式成为 LangChain-AI-Stack 的协作者。
+> Nova（OpenClaw AI）正式成为 LangChain-AI-Stack 的协作者。
 > "The agent that grows with you."
 
 *贡献者：Arthur · Nova · MiniMax-M2*

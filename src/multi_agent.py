@@ -29,6 +29,7 @@ from src.nodes.career_intents import (
     mock_interview, interview_review, career_planning,
 )
 from src.core.state import AgentState
+from src.skill_loader import get_skill_loader, get_skill
 
 
 # ── Singleton agent management ─────────────────────────────────────────────────
@@ -108,18 +109,36 @@ def create_multi_agent():
 
     # ── Agent router: route to appropriate node ─────────────────────────────
     def decide_next_node(state: Dict[str, Any]) -> str:
+        """
+        路由决策：通过 SkillLoader 动态匹配，或降级到默认路由
+
+        SkillLoader 查询逻辑：
+        - intent_mode 匹配 → career intent 节点（mock_interview 等）
+        - question_type 匹配 → 基础路由节点
+        """
         route = state.get("route_decision", "generate_response")
         intent_mode = state.get("intent_mode", "normal")
+        intent = state.get("intent", {})
+        question_type = intent.get("question_type", "")
 
-        # Career intent nodes
-        if intent_mode == "mock_interview":
-            return "mock_interview"
-        if intent_mode == "interview_review":
-            return "interview_review"
-        if intent_mode == "career_planning":
-            return "career_planning"
+        # ── 尝试 SkillLoader 动态匹配 ────────────────────────────────────
+        loader = get_skill_loader()
 
-        # Normal routing
+        # 1. 优先：职业意图模式（intent_mode）
+        if intent_mode not in ("normal", "", None):
+            skill_id = loader.match(intent_mode=intent_mode)
+            if skill_id:
+                print(f"[SkillLoader] intent_mode={intent_mode} → skill={skill_id}")
+                return skill_id
+
+        # 2. 尝试：问题类型匹配（question_type → skill 映射）
+        if question_type:
+            skill_id = loader.match(question_type=question_type)
+            if skill_id:
+                print(f"[SkillLoader] question_type={question_type} → skill={skill_id}")
+                return skill_id
+
+        # 3. 降级：默认路由（route 来自 agent_router 的判断）
         return route
 
     workflow.add_conditional_edges(

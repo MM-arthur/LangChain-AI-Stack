@@ -462,6 +462,103 @@ ws.onmessage = (event) => {
 
 ---
 
+## Skill 加载系统
+
+项目使用 **Skill Loader** 实现能力的动态发现与按需加载。
+
+### 核心概念
+
+```
+SKILL.md 定义 → SkillLoader.scan() → Registry → 按需加载
+```
+
+**Skill** = 一个独立的能力单元，包含：
+- `SKILL.md`：技能描述、触发条件、实现方式
+- `entry`：入口函数（Node / MCP Tool / Python 函数）
+
+### Skill 目录结构
+
+```
+skills/
+├── mock_interview/
+│   └── SKILL.md                ← 模拟面试技能
+├── interview_review/
+│   └── SKILL.md                ← 面试复盘技能
+├── career_planning/
+│   └── SKILL.md                ← 职业规划技能
+└── web_search/
+    └── SKILL.md                ← 网页搜索技能（MCP 类型）
+```
+
+### SKILL.md 格式
+
+```markdown
+# Skill: mock_interview
+
+## 概述
+多轮模拟面试技能。
+
+## 触发条件
+intent_mode: mock_interview
+
+## 实现
+type: node
+entry: src.nodes.career_intents.mock_interview
+```
+
+### SkillLoader 工作流程
+
+```
+用户输入 → intent_recognition → agent_router
+                                      ↓
+                        decide_next_node(state)
+                                      ↓
+                    SkillLoader.match(intent_mode=...)
+                                      ↓
+                    skill_id = "mock_interview"（从 registry 查表）
+                                      ↓
+                    SkillLoader.load(skill_id)
+                                      ↓
+                    返回 mock_interview 函数 → 执行
+```
+
+### 已有 Skill
+
+| Skill | 类型 | 触发条件 | 实现 |
+|------|------|---------|------|
+| `mock_interview` | node | intent_mode=mock_interview | src.nodes.career_intents.mock_interview |
+| `interview_review` | node | intent_mode=interview_review | src.nodes.career_intents.interview_review |
+| `career_planning` | node | intent_mode=career_planning | src.nodes.career_intents.career_planning |
+| `web_search` | mcp | question_type=最新知识 / fallback_for=rag | tavily_search MCP |
+
+### 代码使用
+
+```python
+from src.skill_loader import get_skill_loader, get_skill
+
+# 方式1：通过 loader
+loader = get_skill_loader()
+skill_id = loader.match(intent_mode="mock_interview")  # → "mock_interview"
+skill_fn = loader.load(skill_id)                        # → 函数
+result = skill_fn(state)
+
+# 方式2：快捷函数
+skill_fn = get_skill(intent_mode="mock_interview")
+if skill_fn:
+    result = skill_fn(state)
+
+# 查看所有 Skill
+loader.list_skills()  # → {skill_id: skill_info}
+```
+
+### 新增 Skill 步骤
+
+1. 在 `skills/` 下创建目录，如 `skills/my_skill/`
+2. 写 `SKILL.md`（定义触发条件和 entry）
+3. 启动时 `SkillLoader.scan()` 自动发现，无需修改代码
+
+---
+
 ## MCP 工具系统
 
 项目使用 **Model Context Protocol (MCP)** 实现工具的标准化接入。
@@ -571,8 +668,18 @@ stdio 子进程 ← MCP Server
 LangChain-AI-Stack/
 ├── src/
 │   ├── main.py                      # FastAPI 主服务入口 + SessionManager 单例
-│   ├── multi_agent.py              # LangGraph Agent 定义（核心业务逻辑）
-│   ├── agent_driver.py              # Agent 驱动工具（事件流处理）
+│   ├── multi_agent.py              # LangGraph 图编排（184行，只负责节点串联）
+│   ├── skill_loader.py             # Skill 动态加载器（scan/match/load）
+│   ├── mcp_client.py               # MCP 工具客户端（MultiServerMCPClient 封装）
+│   ├── core/                       # 核心基础设施
+│   │   ├── llm.py                  # LLM 初始化
+│   │   ├── retry.py                # 重试装饰器（指数退避）
+│   │   └── state.py                # AgentState TypedDict 定义
+│   ├── nodes/                      # LangGraph 节点（按领域拆分）
+│   │   ├── preprocessing.py         # pre_router / ocr / document_parsing
+│   │   ├── routing.py              # intent_recognition / agent_router / check_rag_result
+│   │   ├── generation.py           # generate_response / behavior_detection / rag / web_search
+│   │   └── career_intents.py       # mock_interview / interview_review / career_planning
 │   ├── speech_recognition/
 │   │   ├── speech_to_text.py       # PaddleSpeech 语音识别
 │   │   └── sensevoice.py           # Whisper 语音识别
@@ -587,11 +694,21 @@ LangChain-AI-Stack/
 │   │   └── faiss_index/            # FAISS 索引（.gitignore，不上传）
 │   ├── custom_api_llm/
 │   │   └── model.py                 # 自定义 API LLM 模型
-│   ├── mcp_server/                  # MCP 工具服务器
-│   │   ├── mcp_server_time.py       # 时间工具
-│   │   └── mcp_server_web_search.py # 搜索工具
+│   ├── mcp_server/                 # MCP 工具服务器（stdio 通信）
+│   │   ├── mcp_server_time.py      # 时间工具
+│   │   ├── mcp_server_web_search.py # 旧版搜索工具
+│   │   └── mcp_server_tavily_search.py  # Tavily MCP Server
 │   └── ui/
 │       └── index.html               # 前端界面
+├── skills/                          # Skill 定义目录（动态加载）
+│   ├── mock_interview/
+│   │   └── SKILL.md                # 模拟面试技能
+│   ├── interview_review/
+│   │   └── SKILL.md                # 面试复盘技能
+│   ├── career_planning/
+│   │   └── SKILL.md                # 职业规划技能
+│   └── web_search/
+│       └── SKILL.md                # 网页搜索技能（MCP 类型）
 ├── data/                            # SqliteSaver 持久化数据（.gitignore）
 ├── tests/
 │   └── demo/
@@ -599,7 +716,10 @@ LangChain-AI-Stack/
 ├── yolov8n.pt                       # YOLOv8n 行为分析模型（6MB）
 ├── download_models.py               # 预下载 Funasr 语音模型脚本
 ├── mcp_config.json                  # MCP 服务器配置
+├── Dockerfile                       # Docker 部署文件
+├── DEPLOY.md                        # 部署文档
 ├── requirements.txt                 # Python 依赖
+├── requirements-docker.txt          # Docker 镜像专用依赖
 └── README.md
 ```
 

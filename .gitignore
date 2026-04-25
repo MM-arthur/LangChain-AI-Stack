@@ -19,6 +19,7 @@ src/rag/faiss_index/
 .trae/
 .agents/
 skills-lock.json
+skills/_registry.json
 yolov8n.pt
 scripts/
 exp/

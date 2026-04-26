@@ -1,156 +1,68 @@
-# LangChain AI Stack - 面试助手智能体
+# LangChain AI Stack - AI 面试助手
 
-> 基于 **LangGraph** + **Hermes 架构思想** 的智能面试助手。
+> 基于 **LangGraph** 的智能面试助手，支持多轮模拟面试、面试复盘、职业规划。
 > 单例 Agent + 会话隔离 + 流式事件驱动。
 
 **Contributors:**
-[![Arthur](https://img.shields.io/badge/Arthur-MM--arthur-blue)](https://github.com/MM-arthur) · [![Nova](https://img.shields.io/badge/Nova-OpenClaw-green)](https://github.com/openclaw) · **MiniMax-M2**  
-*Co-Authored-By: Nova-OpenClaw <nova@openclaw.ai>*
+[![Arthur](https://img.shields.io/badge/Arthur-MM--arthur-blue)](https://github.com/MM-arthur) · [![Nova](https://img.shields.io/badge/Nova-OpenClaw-green)](https://github.com/openclaw) · **MiniMax-M2**
 
 ---
 
-## 核心架构：单例 Agent + 分层会话管理 + SqliteSaver 持久化
+## 核心特性
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     AgentSingleton                          │
-│              （进程启动时一次性编译，永不重建）                  │
-│                                                             │
-│   ┌─────────────────────────────────────────────────────┐   │
-│   │           Compiled LangGraph StateGraph              │   │
-│   │   pre_router → intent → router → rag/search/generate │   │
-│   └─────────────────────────────────────────────────────┘   │
-└─────────────────────────┬───────────────────────────────────┘
-                          │ session_id (thread_id)
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    SessionManager                           │
-│              （每个 session 一个 SqliteSaver checkpointer）  │
-│                                                             │
-│   session_a ──→ SqliteSaver (a) ──→ 独立状态 + 持久化      │
-│   session_b ──→ SqliteSaver (b) ──→ 独立状态 + 持久化      │
-│   session_c ──→ SqliteSaver (c) ──→ 独立状态 + 持久化      │
-│                                                             │
-│   + MCP client per session（工具集）                         │
-│   + 个人知识库（RAG）per session                             │
-│   + 对话历史 per session                                     │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**设计原则（Hermes 思想）：**
-
-- **一个 Agent 单例，服务所有会话** — 进程级单例，节省编译开销
-- **SqliteSaver 持久化** — 服务重启不丢对话历史
-- **个人知识库 RAG** — Arthur 简历 + JD + CSDN 博客追加到 FAISS
-- **职业意图路由** — mock_interview / interview_review / career_planning
-- **会话隔离靠 Checkpointer** — 每个 session_id 对应独立 SqliteSaver 快照
-- **工具集按会话加载** — MCP client 独立管理，不跨会话污染
-- **渐进式记忆** — 短期会话历史 + 长期 RAG 知识库，分层设计
+| 特性 | 说明 |
+|------|------|
+| 🤝 **模拟面试** | 多轮对话，结束时输出结构化评估报告 |
+| 📋 **面试复盘** | 对照 JD/简历，输出技术评分 + 改进建议 |
+| 🧭 **职业规划** | 召回简历 + 对话历史，输出个性化发展路径 |
+| 🎤 **语音输入** | 实时语音转文字，直接对话 |
+| 📷 **面试官行为分析** | YOLOv8 实时分析表情/视线/姿势/注意力 |
+| 📄 **多格式解析** | 图片/ PDF（OCR）/ Excel / Word / PPT |
+| 🧠 **个人知识库 RAG** | Arthur 简历 + JD + CSDN 博客 → FAISS 向量检索 |
+| 🔍 **实时搜索** | Tavily API 支持最新知识 |
+| 💾 **会话持久化** | SqliteSaver，重启不丢对话历史 |
 
 ---
 
-## 职业意图路由
+## 设计架构
 
-三大职业意图节点，自动识别用户需求：
-
-| 意图节点 | 触发关键词 | 功能 |
-|---------|-----------|------|
-| `mock_interview` | 模拟面试、来面试 | 多轮模拟面试，结束时输出结构化评估报告 |
-| `interview_review` | 复盘、面试表现 | 对照 JD/简历，输出技术评分 + 改进建议 |
-| `career_planning` | 职业方向、怎么发展 | 召回简历 + 历史对话，输出个性化发展路径 |
-
-**意图路由逻辑：**
+### 单例 Agent + 分层会话
 
 ```
-用户输入 → intent_recognition → _get_intent_mode()
+进程启动时 → AgentSingleton 编译一次 LangGraph（11节点）
+              ↓ session_id
+            SessionManager → 每个会话分配独立 SqliteSaver
+              ↓
+            对话历史 + RAG + MCP工具（均会话隔离）
+```
+
+### 意图路由
+
+```
+用户输入
+  ↓
+intent_recognition（LLM识别意图）
+  ↓
+_get_intent_mode()
+  ├── mock_interview    → 多轮模拟面试
+  ├── interview_review  → 面试复盘分析
+  ├── career_planning   → 职业发展规划
+  └── normal_chat       → RAG检索 / 网页搜索 / 直接生成
+```
+
+### 数据流
+
+```
+文本/语音/视频帧 → pre_router → optimize_transcript
+                                      ↓
+                              intent_recognition
+                                      ↓
+                              agent_router → RAG / 搜索 / 生成
                                               ↓
-                           ┌──────────────────────────┐
-                           │ mock_interview           │  模拟面试多轮对话
-                           │ interview_review          │  面试复盘分析
-                           │ career_planning          │  职业发展规划
-                           │ (default: normal_chat)   │  普通对话
-                           └──────────────────────────┘
+                              WebSocket 流式返回
 ```
 
----
-
-## 快速启动
-
-### Step 1: 安装依赖
-
-```bash
-cd LangChain-AI-Stack
-pip install -r requirements.txt
-```
-
-### Step 2: 配置环境变量
-
-创建 `.env` 文件：
-
-```env
-MOONSHOT_API_KEY=your_moonshot_api_key
-TAVILY_API_KEY=your_tavily_api_key
-SPEECH_ENGINE=funasr
-```
-
-### Step 3: 启动服务
-
-```bash
-# 启动后端（自动初始化 Agent 单例）
-python -m src.main
-
-# 启动前端（另一个终端）
-cd src/ui && python -m http.server 8080
-```
-
-**首次启动时，你会看到：**
-
-```
-[AgentSingleton] LangGraph 编译完成，节点数: 11
-[SessionManager] 初始化完成，等待会话请求
-```
-
-> ⚠️ 每次修改 `multi_agent.py` 后需重启服务以重新编译 Agent 图
-
-### Step 4: 访问
-
-- API 文档: <http://localhost:8000/docs>
-- 前端界面: <http://localhost:8080>
-
-### Docker 部署
-
-```bash
-# 构建镜像
-DOCKER_BUILDKIT=1 docker build --tag langchain-ai-stack:latest .
-
-# 运行容器
-docker run -d -p 8000:8000 -p 8080:8080 \
-  -e MOONSHOT_API_KEY=your_api_key \
-  -v $(pwd)/data:/app/data \
-  langchain-ai-stack:latest
-```
-
-详细部署文档见 [DEPLOY.md](./DEPLOY.md)。
-
----
-
-## 与 Hermes Agent 的设计对照
-
-| 维度 | Hermes Agent | LangChain-AI-Stack（本项目） |
-|------|-------------|--------------------------|
-| 单例模式 | AIAgent 单例，服务所有入口 | `AgentSingleton` 编译一次，服务所有 session |
-| 会话持久化 | SQLite + FTS5 per session | `SqliteSaver` per session_id（LangGraph thread） |
-| 工具管理 | 47 注册工具，19 工具集 | `MultiServerMCPClient` per session |
-| 记忆分层 | MEMORY.md + USER.md + 会话历史 | `conversation_history`（会话）+ RAG（长期知识） |
-| 个人知识库 | — | Arthur 简历 + JD + CSDN 博客 → FAISS |
-| 职业意图 | — | mock_interview / interview_review / career_planning |
-| 平台入口 | CLI / Gateway / ACP / Batch / API | WebSocket / REST API |
-
----
-
-## 智能体架构
-
-### 数据流转图
+### Agent 节点图
 
 ```mermaid
 graph TD
@@ -179,7 +91,7 @@ graph TD
     OPTIMIZE[optimize_transcript] --> INTENT[intent_recognition]
     INTENT --> ROUTER[agent_router]
 
-    ROUTER -->|技术问题/个人问题| RAG[RAG检索]
+    ROUTER -->|技术/个人问题| RAG[RAG检索]
     RAG --> CHECK1{RAG有结果?}
     CHECK1 -->|有| GENERATE_RAG[generate_response]
     CHECK1 -->|无| SEARCH
@@ -189,8 +101,7 @@ graph TD
 
     ROUTER -->|开放性问题| GENERATE_OPEN[generate_response]
 
-    ROUTER -->|模拟面试| MOCK[MOCK_INTERVIEW
-    │多轮对话]
+    ROUTER -->|模拟面试| MOCK[MOCK_INTERVIEW 多轮对话]
     MOCK --> MOCK_LOOP{继续?}
     MOCK_LOOP -->|继续| MOCK
     MOCK_LOOP -->|结束| MOCK_REPORT[生成评估报告]
@@ -201,8 +112,7 @@ graph TD
     ROUTER -->|职业规划| CAREER[CAREER_PLANNING]
     CAREER --> CAREER_PLAN[生成发展规划]
 
-    BEHAVIOR_RESULT --> BEHAVIOR_RESP[generate_response
-    面试官分析]
+    BEHAVIOR_RESULT --> BEHAVIOR_RESP[generate_response 面试官分析]
 
     GENERATE_RAG --> END1([输出])
     GENERATE_WEB --> END2([输出])
@@ -237,414 +147,45 @@ graph TD
 
 ---
 
-## 与传统实现的关键区别
-
-| 问题 | 传统实现（修改前） | 当前实现（修改后） |
-|------|----------------|----------------|
-| Agent 实例 | 每次请求 `create_multi_agent()` 重新编译 | 进程启动时一次性编译全局单例 |
-| 会话状态 | 两个全局 `dict`（sessions + conversation_history）分散管理 | `SessionManager` 统一管理生命周期 |
-| Checkpointer | 只有 `/api/initialize` 路径用了 MemorySaver | 每个 session 自动分配独立 SqliteSaver |
-| 会话持久化 | 无持久化，重启丢失 | SqliteSaver 持久化，重启不丢 |
-| MCP 工具 | 每个 session 都重新加载 | 单例加载一次，按需传递给各 session |
-| WebSocket vs REST | 两套 agent 实例，互不感知 | 共用 `AgentSingleton`，差异化靠 session config |
-
----
-
-## 节点详解
-
-### 节点类型
-
-| 颜色 | 类型 | 说明 |
-|------|------|------|
-| 🔵 蓝色 | LLM Node | 云端大语言模型调用 |
-| 🩵 青色 | Local Model Node | 本地模型（Whisper/YOLO/PaddleOCR） |
-| 🟢 绿色 | Tool Node | 纯功能/工具节点 |
-| 🟠 橙色 | Condition Node | 条件判断节点 |
-
----
-
-### 节点列表
-
-| 节点名称 | 类型 | 输入 | 输出 | 功能说明 |
-|--------|------|------|------|---------|
-| `pre_router` | 🟢 Tool | input_text, file_path, video_frame_data | pre_route | 判断输入类型，决定路由 |
-| `ocr_processing` | 🩵 Local | file_path | ocr_result, transcript | PaddleOCR 提取图片/PDF 文字 |
-| `document_parsing` | 🟢 Tool | file_path | document_content, transcript | 解析 Excel/Word 文档 |
-| `behavior_detection` | 🩵 Local | video_frame_data | behavior_result | YOLO 分析面试官行为 |
-| `process_speech_to_text` | 🟢 Tool | input_text, transcript | transcript | 统一处理文本输入 |
-| `optimize_transcript` | 🔵 LLM | transcript | optimized_text | LLM 润色/规范化文本 |
-| `intent_recognition` | 🔵 LLM | optimized_text | intent + intent_mode | 识别问题类型 + 职业意图模式 |
-| `agent_router` | 🔵 LLM | intent | route_decision | 根据意图决定路由 |
-| `mock_interview` | 🔵 LLM | intent + interview_history | interview_response + mock_interview_mode | 模拟面试多轮对话 |
-| `interview_review` | 🔵 LLM | optimized_text | review_report | 面试复盘分析 |
-| `career_planning` | 🔵 LLM | optimized_text | career_plan | 职业发展规划 |
-| `rag_processing` | 🔵 LLM | optimized_text | rag_result, rag_sources | RAG 检索本地知识库 |
-| `check_rag_result` | 🟠 Condition | rag_result | has_content / no_content | 检查 RAG 是否有结果 |
-| `web_search` | 🔵 LLM | optimized_text | web_search_result, web_sources | ReAct Agent 网页搜索 |
-| `generate_response` | 🔵 LLM | context (RAG/网页/行为分析) | response | 生成最终回复 |
-
-**紫色 🔵 LLM 节点**为新增的职业意图节点。
-
----
-
-## AgentState 定义
-
-```mermaid
-classDiagram
-    class AgentState {
-        +str input_text
-        +str file_path
-        +str video_frame_data
-        +str transcript
-        +str optimized_text
-        +Dict intent
-        +str intent_mode           -- 职业意图模式
-        +str route_decision
-        +str pre_route
-        +Dict ocr_result
-        +str document_content
-        +str rag_result
-        +List rag_sources
-        +str web_search_result
-        +List web_sources
-        +Dict behavior_result
-        +str response
-        +List history
-        +str mock_interview_mode   -- 模拟面试轮次
-        +List interview_history    -- 面试对话历史
-        +str review_report          -- 面试复盘报告
-        +str career_plan            -- 职业发展规划
-    }
-```
-
----
-
-## 输入类型与路由
-
-### pre_router 路由规则
-
-| 输入类型 | 检测条件 | 路由目标 |
-|---------|---------|---------|
-| 视频帧 | video_frame_data 非空 | `behavior_detection` |
-| 图片/PDF | file_path 扩展名 [.png/.jpg/.pdf...] | `ocr_processing` |
-| Excel/Word | file_path 扩展名 [.xlsx/.docx...] | `document_parsing` |
-| 文本/语音 | 其他情况 | `process_speech_to_text` |
-
-### agent_router 路由规则
-
-| intent.question_type | 路由目标 | 说明 |
-|---------------------|---------|------|
-| 技术问题 | `rag_processing` | 从本地知识库检索 |
-| 个人问题 | `rag_processing` | 从个人简历/项目经验检索 |
-| 最新知识 | `web_search` | 需要实时信息 |
-| 开放性问题 | `generate_response` | 直接生成回复 |
-| mock_interview | `mock_interview` | 进入模拟面试流程 |
-| interview_review | `interview_review` | 进入面试复盘流程 |
-| career_planning | `career_planning` | 进入职业规划流程 |
-
----
-
-## 典型场景
-
-### 场景 1: 语音问答
-
-```mermaid
-sequenceDiagram
-    participant User as 用户
-    participant Whisper as Whisper
-    participant Agent as LangGraph Agent
-    participant LLM as Moonshot LLM
-
-    User->>Whisper: [语音输入]
-    Whisper->>Agent: 文字 transcript
-    Agent->>LLM: 优化文本
-    LLM->>Agent: optimized_text
-    Agent->>Agent: 意图识别
-    Agent->>Agent: 路由决策
-    Agent->>LLM: 生成回复
-    LLM->>Agent: response
-    Agent->>User: [回复]
-```
-
-### 场景 2: 面试官行为分析
-
-```mermaid
-sequenceDiagram
-    participant Camera as 摄像头
-    participant Frontend as 前端
-    participant API as /api/analyze_behavior
-    participant YOLO as YOLO 模型
-    participant Agent as LangGraph Agent
-    participant LLM as Moonshot LLM
-
-    Camera->>Frontend: 视频帧
-    Frontend->>API: 上传帧
-    API->>YOLO: 检测行为
-    YOLO->>Agent: behavior_result
-    Agent->>LLM: 分析面试官状态
-    LLM->>Agent: 分析建议
-    Agent->>Frontend: 面试官行为反馈
-    Frontend->>Camera: 显示分析结果
-```
-
-### 场景 3: 技术问题（RAG）
-
-```mermaid
-flowchart LR
-    A[用户问题] --> B[意图识别]
-    B --> C{问题类型}
-    C -->|技术问题| D[RAG检索]
-    D --> E{有结果?}
-    E -->|有| F[生成回复]
-    E -->|无| G[网页搜索]
-    G --> F
-    C -->|最新知识| G
-    C -->|开放性| H[直接生成]
-    H --> F
-    F --> I[回复+来源]
-```
-
----
-
-## API 端点
-
-| 端点 | 方法 | 功能 |
-|------|------|------|
-| `/ws/chat/{session_id}` | WebSocket | 对话接口 |
-| `/api/process_audio` | POST | 语音输入（转文字+AI回复） |
-| `/api/speech_to_text` | POST | 仅语音转文字 |
-| `/api/analyze_behavior` | POST | 分析面试官行为（视频帧） |
-| `/api/upload_file` | POST | 文件上传（自动 OCR/解析） |
-| `/api/ocr` | POST | 仅 OCR 处理 |
-| `/api/parse_document` | POST | 仅文档解析 |
-| `/api/config` | GET | 获取 MCP 配置 |
-| `/api/mcp/tools` | GET | 列出所有可用的 MCP 工具 |
-| `/api/mcp/load` | POST | 按需加载指定的 MCP 工具 |
-| `/api/sessions` | GET | 获取所有活跃会话 |
-| `/api/session/{session_id}` | GET | 获取指定会话状态 |
-| `/api/reset_conversation` | POST | 重置会话历史 |
-
-### 调用示例
-
-**语音问答:**
+## 快速启动
 
 ```bash
-curl -X POST http://localhost:8000/api/process_audio \
-  -F "audio=@test.wav"
+# 1. 安装依赖
+pip install -r requirements.txt
+
+# 2. 配置 .env
+MOONSHOT_API_KEY=your_moonshot_api_key
+
+# 3. 启动后端
+python -m src.main
+# 看到 "[AgentSingleton] LangGraph 编译完成，节点数: 11" 即成功
+
+# 4. 启动前端（另一个终端）
+cd src/ui && python -m http.server 8080
 ```
 
-**面试官行为分析:**
-
-```javascript
-const formData = new FormData();
-formData.append('frame', videoFrameBlob);
-await fetch('/api/analyze_behavior', {
-  method: 'POST',
-  body: formData
-});
-```
-
-**文本对话 (WebSocket):**
-
-```javascript
-const ws = new WebSocket('ws://localhost:8000/ws/chat/default');
-ws.send(JSON.stringify({
-  type: 'chat',
-  content: '请介绍一下你自己'
-}));
-ws.onmessage = (event) => {
-  const data = JSON.parse(event.data);
-  if (data.type === 'text') {
-    console.log('回复:', data.content);
-  }
-};
-```
+访问：
+- 前端界面：http://localhost:8080
+- API 文档：http://localhost:8000/docs
 
 ---
 
-## Skill 加载系统
+## 前端：Apple 设计风格
 
-项目使用 **Skill Loader** 实现能力的动态发现与按需加载。
+界面采用 **Apple Design System**，视觉语言：
 
-### 核心概念
+- **配色**：Apple Blue `#0071E3` + 纯白背景 + 浅灰 `#F5F5F7` 气泡
+- **字体**：SF Pro Display → Helvetica Neue 回退
+- **布局**：极简留白，大字层次分明，无多余装饰
+- **深色模式**：跟随系统偏好，Apple 深色系
 
-```
-SKILL.md 定义 → SkillLoader.scan() → Registry → 按需加载
-```
-
-**Skill** = 一个独立的能力单元，包含：
-- `SKILL.md`：技能描述、触发条件、实现方式
-- `entry`：入口函数（Node / MCP Tool / Python 函数）
-
-### Skill 目录结构
-
-```
-skills/
-├── mock_interview/
-│   └── SKILL.md                ← 模拟面试技能
-├── interview_review/
-│   └── SKILL.md                ← 面试复盘技能
-├── career_planning/
-│   └── SKILL.md                ← 职业规划技能
-└── web_search/
-    └── SKILL.md                ← 网页搜索技能（MCP 类型）
-```
-
-### SKILL.md 格式
-
-```markdown
-# Skill: mock_interview
-
-## 概述
-多轮模拟面试技能。
-
-## 触发条件
-intent_mode: mock_interview
-
-## 实现
-type: node
-entry: src.nodes.career_intents.mock_interview
-```
-
-### SkillLoader 工作流程
-
-```
-用户输入 → intent_recognition → agent_router
-                                      ↓
-                        decide_next_node(state)
-                                      ↓
-                    SkillLoader.match(intent_mode=...)
-                                      ↓
-                    skill_id = "mock_interview"（从 registry 查表）
-                                      ↓
-                    SkillLoader.load(skill_id)
-                                      ↓
-                    返回 mock_interview 函数 → 执行
-```
-
-### 已有 Skill
-
-| Skill | 类型 | 触发条件 | 实现 |
-|------|------|---------|------|
-| `mock_interview` | node | intent_mode=mock_interview | src.nodes.career_intents.mock_interview |
-| `interview_review` | node | intent_mode=interview_review | src.nodes.career_intents.interview_review |
-| `career_planning` | node | intent_mode=career_planning | src.nodes.career_intents.career_planning |
-| `web_search` | mcp | question_type=最新知识 / fallback_for=rag | tavily_search MCP |
-
-### 代码使用
-
-```python
-from src.skill_loader import get_skill_loader, get_skill
-
-# 方式1：通过 loader
-loader = get_skill_loader()
-skill_id = loader.match(intent_mode="mock_interview")  # → "mock_interview"
-skill_fn = loader.load(skill_id)                        # → 函数
-result = skill_fn(state)
-
-# 方式2：快捷函数
-skill_fn = get_skill(intent_mode="mock_interview")
-if skill_fn:
-    result = skill_fn(state)
-
-# 查看所有 Skill
-loader.list_skills()  # → {skill_id: skill_info}
-```
-
-### 新增 Skill 步骤
-
-1. 在 `skills/` 下创建目录，如 `skills/my_skill/`
-2. 写 `SKILL.md`（定义触发条件和 entry）
-3. 启动时 `SkillLoader.scan()` 自动发现，无需修改代码
-
----
-
-## MCP 工具系统
-
-项目使用 **Model Context Protocol (MCP)** 实现工具的标准化接入。
-
-### 架构
-
-```
-LangGraph Agent
-     ↓
-MCPToolLoader ← mcp_config.json
-     ↓
-MultiServerMCPClient (langchain-mcp-adapters)
-     ↓
-stdio 子进程 ← MCP Server
-     ↓
-实际工具（Tavily / Time / etc）
-```
-
-### 当前已接入的工具
-
-| 工具名 | 类型 | 说明 |
-|--------|------|------|
-| `get_current_time` | MCP Server | 获取当前时间（支持时区） |
-| `web_search` | MCP Server | 网页搜索（旧版，直接调 SDK） |
-| `tavily_search` | MCP Server | Tavily 网页搜索（新 MCP 协议） |
-| `tavily_sources` | MCP Server | 获取搜索来源链接 |
-
-### MCP Server 开发
-
-新增 MCP 工具只需两步：
-
-1. **编写 MCP Server**（stdio 通信）：
-   ```python
-   from mcp.server.fastmcp import FastMCP
-   mcp = FastMCP("MyTool")
-
-   @mcp.tool()
-   def my_tool(arg1: str) -> str:
-       return f"结果: {arg1}"
-
-   if __name__ == "__main__":
-       mcp.run(transport="stdio")
-   ```
-
-2. **注册到 mcp_config.json**：
-   ```json
-   {
-     "my_tool": {
-       "command": "python",
-       "args": ["src/mcp_server/mcp_server_my_tool.py"],
-       "transport": "stdio"
-     }
-   }
-   ```
-
-3. **在代码中加载**（按需）：
-   ```python
-   from src.mcp_client import get_mcp_tool_loader
-
-   loader = get_mcp_tool_loader()
-   tools = loader.load_tools(["my_tool"])
-   ```
-
-### 多工具并发加载
-
-`MCPToolLoader.load_tools(["tool1", "tool2"])` 支持一次性加载多个工具，共享同一个 client 实例。
-
----
-
-## 前端功能
-
-| 按钮 | 功能 |
+| 元素 | 风格 |
 |------|------|
-| 发送 | 发送文本消息 |
-| 语音输入 | 开始/停止语音录制 |
-| 上传文件 | 上传图片/PDF/Excel/Word |
-| **视觉分析** | 开启/关闭摄像头，实时分析面试官行为 |
-| 重置 | 重置会话 |
-
-**UI 特性：**
-
-- 深色模式（localStorage 记忆用户偏好）
-- 打字动画 + 智能滚动
-- Markdown 渲染（代码块 / 加粗 / 斜体 / 列表）
-- 意图模式指示条 + 面试轮次计数器
-- 消息时间戳
+| 用户气泡 | Apple Blue 实色，无渐变 |
+| AI 气泡 | 浅灰 `#F5F5F7`，底部圆角尖角 |
+| 输入框 | 浅灰边框，Blue focus 环 |
+| 意图栏 | Pill 胶囊，蓝/绿/紫区分模式 |
+| Header | 纯黑背景，1px 底边线 |
 
 ---
 
@@ -652,12 +193,12 @@ stdio 子进程 ← MCP Server
 
 | 类别 | 技术 |
 |------|------|
-| Agent 框架 | LangGraph, LangChain |
+| Agent | LangGraph, LangChain |
 | LLM | Moonshot AI (moonshot-v1-8k) |
-| 语音识别 | Funasr Paraformer (中文, ModelScope) |
-| 行为分析 | YOLOv8n (Ultralytics) |
+| 语音 | Funasr Paraformer（中文）/ Whisper |
+| 行为分析 | YOLOv8n |
 | OCR | PaddleOCR |
-| 向量检索 | FAISS, Sentence Transformers |
+| 向量检索 | FAISS + Sentence Transformers |
 | 搜索 | Tavily API |
 
 ---
@@ -665,144 +206,97 @@ stdio 子进程 ← MCP Server
 ## 项目结构
 
 ```
-LangChain-AI-Stack/
-├── src/
-│   ├── main.py                      # FastAPI 主服务入口 + SessionManager 单例
-│   ├── multi_agent.py              # LangGraph 图编排（184行，只负责节点串联）
-│   ├── skill_loader.py             # Skill 动态加载器（scan/match/load）
-│   ├── mcp_client.py               # MCP 工具客户端（MultiServerMCPClient 封装）
-│   ├── core/                       # 核心基础设施
-│   │   ├── llm.py                  # LLM 初始化
-│   │   ├── retry.py                # 重试装饰器（指数退避）
-│   │   └── state.py                # AgentState TypedDict 定义
-│   ├── nodes/                      # LangGraph 节点（按领域拆分）
-│   │   ├── preprocessing.py         # pre_router / ocr / document_parsing
-│   │   ├── routing.py              # intent_recognition / agent_router / check_rag_result
-│   │   ├── generation.py           # generate_response / behavior_detection / rag / web_search
-│   │   └── career_intents.py       # mock_interview / interview_review / career_planning
-│   ├── speech_recognition/
-│   │   ├── speech_to_text.py       # PaddleSpeech 语音识别
-│   │   └── sensevoice.py           # Whisper 语音识别
-│   ├── behavior_detection/
-│   │   └── behavior_analyzer.py    # YOLO 面试官行为分析
-│   ├── ocr/
-│   │   └── ocr_service.py          # PaddleOCR 文字识别
-│   ├── document_parser/
-│   │   └── document_parser_service.py  # Excel/Word 文档解析
-│   ├── rag/
-│   │   └── RAG.py                  # 向量检索增强（FAISS 持久化 + 个人知识库）
-│   │   └── faiss_index/            # FAISS 索引（.gitignore，不上传）
-│   ├── custom_api_llm/
-│   │   └── model.py                 # 自定义 API LLM 模型
-│   ├── mcp_server/                 # MCP 工具服务器（stdio 通信）
-│   │   ├── mcp_server_time.py      # 时间工具
-│   │   ├── mcp_server_web_search.py # 旧版搜索工具
-│   │   └── mcp_server_tavily_search.py  # Tavily MCP Server
-│   └── ui/
-│       └── index.html               # 前端界面
-├── skills/                          # Skill 定义目录（动态加载）
-│   ├── mock_interview/
-│   │   └── SKILL.md                # 模拟面试技能
-│   ├── interview_review/
-│   │   └── SKILL.md                # 面试复盘技能
-│   ├── career_planning/
-│   │   └── SKILL.md                # 职业规划技能
-│   └── web_search/
-│       └── SKILL.md                # 网页搜索技能（MCP 类型）
-├── data/                            # SqliteSaver 持久化数据（.gitignore）
-├── tests/
-│   └── demo/
-│       └── easychat.py              # 简单对话示例
-├── yolov8n.pt                       # YOLOv8n 行为分析模型（6MB）
-├── download_models.py               # 预下载 Funasr 语音模型脚本
-├── mcp_config.json                  # MCP 服务器配置
-├── Dockerfile                       # Docker 部署文件
-├── DEPLOY.md                        # 部署文档
-├── requirements.txt                 # Python 依赖
-├── requirements-docker.txt          # Docker 镜像专用依赖
-└── README.md
+src/
+├── main.py              # FastAPI 入口 + SessionManager 单例
+├── multi_agent.py       # LangGraph 定义（11节点）
+├── skill_loader.py     # Skill 动态加载
+├── mcp_client.py       # MCP 工具客户端
+├── core/               # LLM / 重试 / AgentState
+├── nodes/              # 节点实现
+│   ├── preprocessing.py   # pre_router / OCR / 文档解析
+│   ├── routing.py         # 意图识别 / 路由 / RAG检查
+│   ├── generation.py      # RAG / 搜索 / 生成 / 行为分析
+│   └── career_intents.py # 模拟面试 / 复盘 / 职业规划
+├── rag/
+│   └── RAG.py         # FAISS持久化 + 个人知识库
+└── ui/
+    └── index.html     # Apple 风格前端（Vue 3）
+skills/                   # Skill 定义（mock_interview / review / career）
 ```
 
 ---
 
-## 核心模块说明
+## API 概览
 
-### 1. main.py - API 服务入口 + SessionManager
+| 端点 | 方式 | 功能 |
+|------|------|------|
+| `/ws/chat/{session_id}` | WebSocket | 对话（流式） |
+| `/api/models` | GET | 可用模型列表 |
+| `/api/initialize` | POST | 初始化会话 |
+| `/api/process_audio` | POST | 语音 → 转文字 → AI回复 |
+| `/api/analyze_behavior` | POST | 视频帧 → YOLO行为分析 |
+| `/api/upload` | POST | 文件上传（OCR/解析） |
 
-**单例初始化顺序：**
-1. 启动时创建 `AgentSingleton`（编译 LangGraph graph）
-2. 创建 `SessionManager` 单例（管理所有会话）
-3. FastAPI 启动，接受请求
+**WebSocket 对话示例：**
 
-**SessionManager 职责：**
-- `get_agent(session_id)` — 返回该 session 的 agent（绑定独立 checkpointer）
-- `get_history(session_id)` — 获取会话历史
-- `update_history(session_id, history)` — 更新历史
-- `cleanup(session_id)` — 销毁会话
+```javascript
+const ws = new WebSocket('ws://localhost:8000/ws/chat/session_1');
+ws.send(JSON.stringify({ type: 'chat', content: '来，模拟面试一下' }));
 
-### 2. multi_agent.py - LangGraph Agent 定义
-
-> 核心业务逻辑，定义 11 个节点 + 条件边。
-> `create_multi_agent()` 被 `AgentSingleton` 调用一次，编译后全局共享。
-
-### 3. agent_driver.py - 事件流驱动
-
-> 处理 LangGraph Agent 的流式事件，将细粒度执行事件转换为前端可理解的统一消息格式。
-
-### 4. speech_recognition/ - 语音识别服务
-
-- `sensevoice.py` - Whisper 语音识别（默认引擎）
-- `speech_to_text.py` - PaddleSpeech 语音识别
-
-### 5. behavior_detection/ - 行为分析服务
-
-`behavior_analyzer.py` - YOLOv8n 人体检测 + 姿态/视线/表情分析
+ws.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  if (data.type === 'text') process.stdout.write(data.content);
+  if (data.type === 'complete') {
+    console.log('\n意图模式:', data.intent_mode);
+    console.log('面试轮次:', data.current_round);
+  }
+};
+```
 
 ---
 
-## 环境变量配置
+## 环境变量
 
-| 变量名 | 必填 | 说明 | 默认值 |
-|------|---|------|--- |
-| `MOONSHOT_API_KEY` | 是 | Moonshot AI API 密钥 | - |
-| `TAVILY_API_KEY` | 否 | Tavily 搜索 API 密钥 | - |
-| `SPEECH_ENGINE` | 否 | 语音引擎 `sensevoice` 或 `paddlespeech` | `sensevoice` |
-| `MOONSHOT_MODEL` | 否 | Moonshot 模型名称 | `moonshot-v1-8k` |
+| 变量 | 必填 | 说明 | 默认值 |
+|------|------|------|--------|
+| `MOONSHOT_API_KEY` | ✅ | Moonshot API 密钥 | - |
+| `TAVILY_API_KEY` | 否 | Tavily 搜索 | - |
+| `SPEECH_ENGINE` | 否 | `sensevoice` 或 `funasr` | `sensevoice` |
 
 ---
 
-## 开发指南
-
-### 修改 Agent 逻辑
-
-所有 Agent 节点定义在 `src/multi_agent.py`，修改后需重启服务使单例重新编译。
-
-### 调试会话状态
+## Docker 部署
 
 ```bash
-# 查看当前活跃 session
-GET /api/sessions
-
-# 查看指定 session 的状态
-GET /api/session/{session_id}
-
-# 重置指定会话
-POST /api/reset_conversation
+docker build -t langchain-ai-stack .
+docker run -d -p 8000:8000 -p 8080:8080 \
+  -e MOONSHOT_API_KEY=your_key \
+  -v $(pwd)/data:/app/data \
+  langchain-ai-stack
 ```
 
-### 添加新工具
-
-1. 在 `mcp_config.json` 注册工具
-2. 或在 `rag/RAG.py` 添加新的检索源
-3. 重启服务生效
+详细文档见 [DEPLOY.md](./DEPLOY.md)。
 
 ---
 
-## 🏆 里程碑
+## 开发
 
-### Nova 加入协作
+**修改 Agent 逻辑** → 编辑 `src/multi_agent.py` → 重启服务
 
-> Nova（OpenClaw AI）正式成为 LangChain-AI-Stack 的协作者。
-> "The agent that grows with you."
+**调试会话：**
+```bash
+GET  /api/sessions              # 查看活跃会话
+GET  /api/session/{session_id} # 查看指定会话状态
+POST /api/reset_conversation   # 重置会话
+```
 
-*贡献者：Arthur · Nova · MiniMax-M2*
+---
+
+## 里程碑
+
+- **2026.04** Nova（OpenClaw）加入协作，前端升级 Apple 设计风格
+- **2026.04** SqliteSaver 持久化 + FAISS 个人知识库
+- **2026.04** 职业意图路由（模拟面试/复盘/职业规划）
+- **2026.03** LangGraph 单例 Agent 上线
+
+*Arthur · Nova · MiniMax-M2*

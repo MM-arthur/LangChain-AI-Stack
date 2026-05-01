@@ -20,17 +20,38 @@ def mock_interview(state: Dict[str, Any]) -> Dict[str, Any]:
     current_round = state.get("current_round", 0)
     mock_interview_mode = state.get("mock_interview_mode", False)
 
+    # 获取历史练习数据（用于有针对性的面试）
+    try:
+        from src.memory.evaluation_memory import get_evaluation_memory
+        mem = get_evaluation_memory()
+        recent_stats = mem.get_recent_topic_stats(limit=5)
+        profile = mem.get_profile()
+        if recent_stats:
+            stats_text = "\n".join([f"- {s['topic']}: 平均 {s['avg_score']}/5 ({s['count']}次练习，趋势: {s['trend']})" for s in recent_stats])
+            history_context = f"\n\n**Arthur 最近练习情况**（供参考，出题可以针对性）：\n{stats_text}\n\n**Arthur 弱点**：{profile.weaknesses if profile.weaknesses else '暂无记录'}\n**Arthur 优势**：{profile.strengths if profile.strengths else '暂无记录'}"
+        else:
+            history_context = "\n\n（Arthur 首次练习，无历史数据）"
+        improvement = mem.suggest_improvement()
+    except Exception:
+        history_context = ""
+        improvement = ""
+
     # 启动面试
     if not mock_interview_mode:
         mock_interview_mode = True
         current_round = 0
         start_prompt = ChatPromptTemplate.from_messages([
-            ("system", """你是 Arthur 的模拟面试官。
+            ("system", f"""你是 Arthur 的模拟面试官。
 
 **角色**：
 - 你是一个专业、技术深入的面试官
 - 面试者是 Arthur（你的学生）
 - 目标是通过多轮问答评估 Arthur 的能力
+
+**Arthur 背景**（来自历史记忆）：{history_context}
+
+**改进建议**：
+{improvement}
 
 **流程**：
 1. 先问一个热身问题（1-2分钟）：自我介绍、项目概述
@@ -122,6 +143,39 @@ def mock_interview(state: Dict[str, Any]) -> Dict[str, Any]:
             report = _generate_interview_report(interview_history, current_round)
             print(f"✅ 模拟面试结束，共 {current_round} 轮")
 
+            # 解析报告中的评分并保存到 evaluation memory
+            try:
+                from src.memory.evaluation_memory import get_evaluation_memory
+                import json, re
+                mem = get_evaluation_memory()
+                session_id = state.get("session_id", "unknown")
+                
+                # 从报告中提取 SCORES_JSON
+                scores_match = re.search(r'SCORES_JSON:\s*(\{"overall".*?\})', report, re.DOTALL)
+                if scores_match:
+                    scores_data = json.loads(scores_match.group(1))
+                    # 清理报告中的 SCORES_JSON 行（不展示给用户）
+                    report = re.sub(r'SCORES_JSON:.*?\}\s*\n?', '', report).strip()
+                    
+                    # 保存评估
+                    mem.save_evaluation(
+                        session_id=session_id,
+                        rounds=current_round,
+                        overall_score=scores_data.get("overall", 3.0),
+                        technical_depth=scores_data.get("technical_depth", 3.0),
+                        communication=scores_data.get("communication", 3.0),
+                        project_experience=scores_data.get("project_experience", 3.0),
+                        problem_solving=scores_data.get("problem_solving", 3.0),
+                        topic_scores=scores_data.get("topic_scores", []),
+                        raw_report=report,
+                        summary=f"面试轮次{current_round}轮，综合评分{scores_data.get('overall', 3.0):.1f}/5"
+                    )
+                    print(f"✅ 评估已保存到 memory (session={session_id})")
+                else:
+                    print(f"⚠️ 报告中未找到 SCORES_JSON，跳过保存")
+            except Exception as e:
+                print(f"⚠️ 保存评估失败: {e}")
+
             return {
                 **state,
                 "response": f"{feedback}\n\n{report}",
@@ -161,6 +215,18 @@ def _generate_interview_report(history: List[str], rounds: int) -> str:
     """生成结构化面试评估报告"""
     llm = init_llm()
 
+    # 调用 evaluation memory 获取历史数据（用于 AI 参考）
+    try:
+        from src.memory.evaluation_memory import get_evaluation_memory
+        mem = get_evaluation_memory()
+        recent_stats = mem.get_recent_topic_stats(limit=5)
+        profile = mem.get_profile()
+        history_context = f"Arthur 历史练习情况：{recent_stats}" if recent_stats else "（首次练习）"
+        improvement_suggestion = mem.suggest_improvement()
+    except Exception:
+        history_context = ""
+        improvement_suggestion = ""
+
     prompt = ChatPromptTemplate.from_messages([
         ("system", """你是专业的面试评估专家。根据面试历史，生成结构化评估报告。
 
@@ -171,8 +237,17 @@ def _generate_interview_report(history: List[str], rounds: int) -> str:
 4. 临场反应：回答问题的速度和灵活性
 5. 整体建议：需要提高的方向
 
-**格式要求**：
-使用 Markdown，结构清晰，适合直接给候选人看。
+**Arthur 历史练习情况（供参考）**：
+{history_context}
+
+**改进建议**：
+{improvement}
+
+**输出要求**：
+- 使用 Markdown，结构清晰，适合直接给候选人看
+- **重要**：在报告末尾追加一行纯文本格式的行，包含各维度评分，格式为：
+  SCORES_JSON: {{"overall": 3.5, "technical_depth": 4.0, "communication": 3.0, "project_experience": 3.5, "problem_solving": 3.0, "topic_scores": [{{"topic": "Vue", "score": 4.0}}, {{"topic": "Redis", "score": 3.0}}]}}
+  这行只包含评分数据，不包含任何个人信息
 
 **报告标题**：
 ## 🎯 模拟面试评估报告"""),
@@ -181,7 +256,7 @@ def _generate_interview_report(history: List[str], rounds: int) -> str:
 
     chain = prompt | llm
     history_text = "\n".join(history[-20:])  # 最近20条
-    response = chain.invoke({"history": history_text, "rounds": str(rounds)})
+    response = chain.invoke({"history": history_text, "rounds": str(rounds), "history_context": history_context, "improvement": improvement_suggestion})
     return response.content
 
 

@@ -158,8 +158,8 @@ pip install -r requirements.txt
 MOONSHOT_API_KEY=your_moonshot_api_key
 
 # 3. 启动后端
-python -m src.main
-# 看到 "[AgentSingleton] LangGraph 编译完成,节点数: 11" 即成功
+python -m uvicorn src.main:app --host 0.0.0.0 --port 8000
+# 看到 "[AgentSingleton] LangGraph 编译完成" 即成功
 
 # 4. 启动前端(另一个终端)
 cd src/ui && python -m http.server 8080
@@ -208,18 +208,23 @@ cd src/ui && python -m http.server 8080
 
 ```
 src/
-├── main.py              # FastAPI 入口 + SessionManager 单例
+├── main.py              # FastAPI 入口（路由注册 + CORS + startup）
 ├── multi_agent.py       # LangGraph 定义（11节点）
 ├── skill_loader.py     # Skill 动态加载
 ├── mcp_client.py       # MCP 工具客户端
-├── core/               # LLM / 重试 / AgentState
+├── routes/             # 路由模块（从 main.py 拆分）
+│   ├── rest.py         # REST API 端点
+│   └── websocket.py    # WebSocket 聊天处理器
+├── core/               # 核心模块
+│   ├── session_manager.py  # SessionManager + AgentSingleton 单例
+│   ├── state.py           # AgentState 定义
+│   ├── llm.py             # LLM 配置
+│   └── retry.py           # 重试机制
 ├── memory/             # 评估历史记忆系统
 │   └── evaluation_memory.py  # Topic评分 / 趋势 / 改进建议
 ├── nodes/              # 节点实现
-│   ├── preprocessing.py   # pre_router / OCR / 文档解析
-│   ├── routing.py         # 意图识别 / 路由 / RAG检查
-│   ├── generation.py      # RAG / 搜索 / 生成 / 行为分析
-│   └── career_intents.py # 模拟面试 / 复盘 / 职业规划
+│   ├── career_intents.py # 模拟面试 / 复盘 / 职业规划
+│   └── ...              # preprocessing / routing / generation
 ├── rag/
 │   └── RAG.py         # FAISS持久化 + 个人知识库
 └── ui/

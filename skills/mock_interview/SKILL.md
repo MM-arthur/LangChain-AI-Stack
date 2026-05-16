@@ -14,6 +14,35 @@ type: node
 entry: src.nodes.career_intents.mock_interview
 ```
 
+## 工作流（DeerFlow风格）
+```
+1. 分析用户输入，判断是否为第一轮
+2. 第一轮：生成开场白 + 第一个面试问题
+3. 非第一轮：分析用户回答 → 生成追问或反馈
+4. 每轮结束时判断：继续面试 / 结束面试
+5. 面试结束时：输出结构化评估报告
+```
+
+## 可调用子技能
+```
+calls:
+  - skill: interview_review
+    trigger: interview_ended
+  - skill: rag_processing
+    trigger: needs_knowledge_qa
+```
+
+## 子Agent定义
+```
+sub_agents:
+  - name: question_generator
+    role: 资深面试官，擅长追问
+    tools: [web_search, rag_processing]
+  - name: evaluator
+    role: 面试评估师，输出结构化报告
+    tools: []
+```
+
 ## 描述
 模拟面试官角色，多轮问答，结束时输出结构化评估报告。
 

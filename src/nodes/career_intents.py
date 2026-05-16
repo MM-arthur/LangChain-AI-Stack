@@ -36,6 +36,18 @@ def mock_interview(state: Dict[str, Any]) -> Dict[str, Any]:
         history_context = ""
         improvement = ""
 
+    # 获取 Skill 工作流描述（DeerFlow 风格，供 LLM 参考执行步骤）
+    try:
+        from src.skill_manager import get_skill_manager
+        sm = get_skill_manager()
+        workflow_desc = sm.get_workflow("mock_interview")
+        if workflow_desc:
+            workflow_context = f"\n\n**【LLM 执行参考】DeerFlow 工作流步骤**：\n{workflow_desc}"
+        else:
+            workflow_context = ""
+    except Exception:
+        workflow_context = ""
+
     # 启动面试
     if not mock_interview_mode:
         mock_interview_mode = True
@@ -58,6 +70,8 @@ def mock_interview(state: Dict[str, Any]) -> Dict[str, Any]:
 2. 逐步深入技术问题（根据回答调整难度）
 3. 每轮结束后简短点评，给出下一题提示
 4. 3-5轮后给出整体评估报告
+
+{workflow_context}
 
 **开场白**：
 "你好 Arthur，欢迎来参加今天的模拟面试。我会从自我介绍开始，逐步深入到技术细节。让我们开始吧！请简单介绍一下你自己，以及你最近在做的一个项目。"
@@ -100,9 +114,12 @@ def mock_interview(state: Dict[str, Any]) -> Dict[str, Any]:
 **最新回答来自 Arthur**：
 {latest_answer}
 
+**DeerFlow 工作流步骤**（LLM 执行参考）：
+{workflow_desc}
+
 **你的任务**：
 1. 简短点评 Arthur 的回答（1-2句话）
-2. 决定是继续追问还是结束面试
+2. 按照工作流步骤决定是继续追问还是结束面试
 
 **决策规则**：
 - current_round >= 5：结束面试，输出评估报告
@@ -118,10 +135,22 @@ def mock_interview(state: Dict[str, Any]) -> Dict[str, Any]:
         ("human", f"Arthur 回答：{candidate_answer}")
     ])
 
+    # 获取 workflow 描述
+    try:
+        from src.skill_manager import get_skill_manager
+        sm = get_skill_manager()
+        workflow_desc = sm.get_workflow("mock_interview") or "（无工作流描述）"
+    except Exception:
+        workflow_desc = "（无工作流描述）"
+
     chain = analysis_prompt | llm
 
     try:
-        response = chain.invoke({})
+        response = chain.invoke({
+            "history": "\n".join(interview_history[-20:]),
+            "latest_answer": candidate_answer,
+            "workflow_desc": workflow_desc
+        })
         content = response.content.strip()
 
         if "```json" in content:

@@ -1,6 +1,7 @@
-# LangChain AI Stack - AI 面试助手
+# IntelliView - AI 面试实时助手
 
-> 基于 **LangGraph** 的智能面试助手,支持多轮模拟面试、面试复盘、职业规划。
+> 不再害怕面试，AI 全程护航。
+> 基于 **LangGraph** 的智能面试助手，实时 Handle 面试官，支持多轮模拟面试、面试复盘、职业规划。
 > 单例 Agent + 会话隔离 + 流式事件驱动。
 
 **Contributors:**
@@ -210,7 +211,7 @@ cd src/ui && python -m http.server 8080
 src/
 ├── main.py              # FastAPI 入口（路由注册 + CORS + startup）
 ├── multi_agent.py       # LangGraph 定义（11节点）
-├── skill_loader.py     # Skill 动态加载
+├── skill_manager.py   # 统一 Skill 加载（支持 DeerFlow workflow/calls/sub_agents）
 ├── mcp_client.py       # MCP 工具客户端
 ├── routes/             # 路由模块（从 main.py 拆分）
 │   ├── rest.py         # REST API 端点
@@ -272,6 +273,50 @@ ws.onmessage = (event) => {
 
 ---
 
+## Skill 系统
+
+核心文件：`src/skill_manager.py`（唯一文件，包含 SkillLoader + SkillManager）
+
+支持 DeerFlow 风格增强字段（SKILL.md）：
+
+```markdown
+## 工作流
+1. 初始化面试情境
+2. 生成第一个问题
+3. 分析用户回答
+4. 结束时调用 interview_review
+
+## 可调用子技能
+calls:
+  - skill: interview_review
+    trigger: interview_ended
+
+## 子Agent定义
+- name: question_generator
+  role: 资深面试官，擅长追问
+  tools: [web_search, rag_processing]
+```
+
+**使用示例**（Python）：
+```python
+from src.skill_manager import get_skill_manager
+
+sm = get_skill_manager()
+
+# 获取 Skill 函数
+skill_fn = sm.get_skill(intent_mode="mock_interview")
+
+# 获取增强字段
+workflow = sm.get_workflow("mock_interview")      # 工作流描述
+calls    = sm.get_calls("mock_interview")         # chaining 规则
+agents   = sm.get_sub_agents("mock_interview")   # 子 Agent 定义
+
+# 获取 Skill 元信息
+info = sm.get_skill_info("mock_interview")
+```
+
+---
+
 ## Docker 部署
 
 ```bash
@@ -301,6 +346,6 @@ POST /api/reset_conversation   # 重置会话
 
 ## 里程碑
 
-- **2026.05** Nova 加入贡献，Evaluation Memory 面试评估历史追踪系统上线
+- **2026.04** Nova 加入贡献
 
 *Arthur · Nova · MiniMax-M2*
